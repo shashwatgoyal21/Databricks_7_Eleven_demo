@@ -1,0 +1,38 @@
+"""Run the whole pipeline locally in pandas and write the gold tables to .local_data/.
+
+The Streamlit app reads .local_data/ when NBO_LOCAL_DATA is set, so the demo can be
+previewed without a workspace:
+
+    python local_run.py
+    NBO_LOCAL_DATA=.local_data streamlit run app/app.py
+"""
+
+import sys
+import time
+from pathlib import Path
+
+sys.path.insert(0, str(Path(__file__).parent / "src"))
+import nbo_lib  # noqa: E402
+
+members = int(sys.argv[1]) if len(sys.argv) > 1 else 25_000
+out = Path(__file__).parent / ".local_data"
+out.mkdir(exist_ok=True)
+
+t0 = time.time()
+raw, gold = nbo_lib.run_all(members)
+print(f"Built in {time.time() - t0:.0f}s: {len(raw['pos_baskets']):,} baskets, "
+      f"{len(raw['offer_history']):,} offer events")
+
+# The tables the app reads
+for name, df in {"promotions": raw["promotions"], **gold}.items():
+    df.to_parquet(out / f"{name}.parquet", index=False)
+
+nbo_lib.story_checks(nbo_lib.story_numbers(gold["promo_monthly"], gold["promo_portfolio"], gold["tier_backtest"]))
+print()
+print(gold["promo_portfolio"][["short_name", "eligible_members", "persuadable_members", "redemption_rate_apr_sep",
+                               "measured_uplift_apr_sep", "blast_net_margin_per_send",
+                               "targeted_net_margin_per_send", "status"]].round(3).to_string())
+print()
+print(gold["tier_backtest"].round(3).to_string())
+print()
+print(gold["featured_members"].to_string())

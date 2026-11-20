@@ -1,0 +1,71 @@
+bundle:
+  name: nbo-demo
+
+variables:
+  catalog:
+    description: Unity Catalog catalog for the demo tables
+    default: workspace
+  schema:
+    description: Schema for the demo tables (keep in sync with NBO_SCHEMA in app/app.yaml)
+    default: nbo_demo
+  members:
+    description: Number of synthetic loyalty members to simulate
+    default: "25000"
+  warehouse_id:
+    description: Pro or Serverless SQL warehouse the app queries
+    default: bb3aef1c44eb3c3a
+
+resources:
+  jobs:
+    nbo_demo_build:
+      name: nbo-demo-build
+      tasks:
+        - task_key: generate_data
+          notebook_task:
+            notebook_path: ./src/01_generate_data.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              members: ${var.members}
+        - task_key: train_and_score
+          depends_on:
+            - task_key: generate_data
+          notebook_task:
+            notebook_path: ./src/02_train_and_score.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+        - task_key: validate_story
+          depends_on:
+            - task_key: train_and_score
+          notebook_task:
+            notebook_path: ./src/03_validate_story.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+        - task_key: governance
+          depends_on:
+            - task_key: validate_story
+          notebook_task:
+            notebook_path: ./src/04_governance.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+
+  apps:
+    nbo_app:
+      name: nbo-decision-engine
+      description: Next Best Offer decision engine on synthetic loyalty data
+      source_code_path: ./app
+      resources:
+        - name: sql-warehouse
+          sql_warehouse:
+            id: ${var.warehouse_id}
+            permission: CAN_USE
+
+targets:
+  dev:
+    mode: development
+    default: true
+    workspace:
+      host: https://dbc-658a2a7c-0afe.cloud.databricks.com

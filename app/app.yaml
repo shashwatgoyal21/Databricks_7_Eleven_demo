@@ -1,0 +1,11 @@
+command: ["streamlit", "run", "app.py"]
+env:
+  - name: DATABRICKS_WAREHOUSE_ID
+    valueFrom: sql-warehouse
+  - name: NBO_SCHEMA
+    value: workspace.nbo_demo
+  - name: NBO_BRAND
+    value: "7-Eleven"
+  # Filled in by DEPLOY.md step 7 once the Genie space exists. Empty = the Ask Genie tab shows setup help.
+  - name: GENIE_SPACE_ID
+    value: ""

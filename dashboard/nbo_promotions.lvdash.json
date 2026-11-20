@@ -1,0 +1,942 @@
+{
+  "datasets": [
+    {
+      "name": "kpi_spend_margin",
+      "displayName": "KPI: spend and margin, Apr-Sep vs Jan-Mar",
+      "queryLines": [
+        "SELECT post.monthly_discount_spend, pre.monthly_discount_spend AS monthly_discount_spend_pre,\n",
+        "       post.monthly_incremental_margin, pre.monthly_incremental_margin AS monthly_incremental_margin_pre\n",
+        "FROM (SELECT MEASURE(monthly_discount_spend) AS monthly_discount_spend,\n",
+        "             MEASURE(monthly_incremental_margin) AS monthly_incremental_margin\n",
+        "      FROM metrics_promotions WHERE send_policy = 'All eligible (Apr-Sep)') post\n",
+        "CROSS JOIN (SELECT MEASURE(monthly_discount_spend) AS monthly_discount_spend,\n",
+        "                   MEASURE(monthly_incremental_margin) AS monthly_incremental_margin\n",
+        "            FROM metrics_promotions WHERE send_policy <> 'All eligible (Apr-Sep)') pre\n"
+      ]
+    },
+    {
+      "name": "kpi_coffee_anyway",
+      "displayName": "KPI: Coffee + Croissant redemptions that would happen anyway",
+      "queryLines": [
+        "SELECT MEASURE(redemption_rate) AS redemption_rate,\n",
+        "       MEASURE(redemptions_that_would_happen_anyway) AS would_happen_anyway\n",
+        "FROM metrics_promotions\n",
+        "WHERE promotion_id = 'PR01' AND send_policy = 'All eligible (Apr-Sep)'\n"
+      ]
+    },
+    {
+      "name": "kpi_targeting_gain",
+      "displayName": "KPI: annual gain from uplift targeting",
+      "queryLines": [
+        "SELECT SUM(annual_gain_vs_blast) AS annual_gain_vs_blast\n",
+        "FROM promo_portfolio\n"
+      ]
+    },
+    {
+      "name": "spend_vs_margin_trend",
+      "displayName": "Discount spend vs incremental margin by month",
+      "queryLines": [
+        "SELECT month_end, 'Discount spend' AS measure, MEASURE(discount_spend) AS usd\n",
+        "FROM metrics_promotions\n",
+        "GROUP BY month_end\n",
+        "UNION ALL\n",
+        "SELECT month_end, 'Incremental margin' AS measure, MEASURE(incremental_margin) AS usd\n",
+        "FROM metrics_promotions\n",
+        "GROUP BY month_end\n",
+        "ORDER BY month_end\n"
+      ]
+    },
+    {
+      "name": "redemption_vs_lift",
+      "displayName": "Redemption rate vs measured lift, Apr-Sep",
+      "queryLines": [
+        "SELECT promotion, 'Redemption rate' AS measure, MEASURE(redemption_rate) AS rate\n",
+        "FROM metrics_promotions\n",
+        "WHERE send_policy = 'All eligible (Apr-Sep)'\n",
+        "GROUP BY promotion\n",
+        "UNION ALL\n",
+        "SELECT promotion, 'Measured lift' AS measure, MEASURE(measured_lift) AS rate\n",
+        "FROM metrics_promotions\n",
+        "WHERE send_policy = 'All eligible (Apr-Sep)'\n",
+        "GROUP BY promotion\n"
+      ]
+    },
+    {
+      "name": "margin_by_region",
+      "displayName": "Incremental margin by region, Apr-Sep",
+      "queryLines": [
+        "SELECT region, promotion, MEASURE(incremental_margin) AS incremental_margin\n",
+        "FROM metrics_promotions\n",
+        "WHERE send_policy = 'All eligible (Apr-Sep)'\n",
+        "GROUP BY region, promotion\n"
+      ]
+    },
+    {
+      "name": "tier_backtest",
+      "displayName": "Measured lift by model tier",
+      "queryLines": [
+        "SELECT p.short_name AS promotion, b.tier, b.measured_uplift, b.treatment_sends, b.holdout_sends\n",
+        "FROM tier_backtest b\n",
+        "JOIN promotions p USING (promotion_id)\n",
+        "WHERE b.holdout_sends >= 30\n"
+      ]
+    },
+    {
+      "name": "portfolio",
+      "displayName": "Promotion portfolio",
+      "queryLines": [
+        "SELECT opportunity_rank, short_name AS promotion, eligible_members, persuadable_members,\n",
+        "       redemption_rate_apr_sep, measured_uplift_apr_sep,\n",
+        "       blast_net_margin_per_send, targeted_net_margin_per_send, annual_opportunity_targeted, status\n",
+        "FROM promo_portfolio\n",
+        "ORDER BY opportunity_rank\n"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "spend",
+      "displayName": "Is promo spend working?",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "p1-title",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Is promo spend working?\n",
+                "\n",
+                "Since 2026-04-01 every offer goes to everyone eligible. Every send keeps a 10% holdout, so incremental margin is measured, not assumed."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-spend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpi_spend_margin",
+                  "fields": [
+                    {
+                      "name": "monthly_discount_spend",
+                      "expression": "`monthly_discount_spend`"
+                    },
+                    {
+                      "name": "monthly_discount_spend_pre",
+                      "expression": "`monthly_discount_spend_pre`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "monthly_discount_spend",
+                  "displayName": "Monthly discount spend, Apr-Sep",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                },
+                "target": {
+                  "fieldName": "monthly_discount_spend_pre",
+                  "displayName": "Jan-Mar",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Monthly discount spend, Apr-Sep"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-margin",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpi_spend_margin",
+                  "fields": [
+                    {
+                      "name": "monthly_incremental_margin",
+                      "expression": "`monthly_incremental_margin`"
+                    },
+                    {
+                      "name": "monthly_incremental_margin_pre",
+                      "expression": "`monthly_incremental_margin_pre`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "monthly_incremental_margin",
+                  "displayName": "Monthly incremental margin, Apr-Sep",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                },
+                "target": {
+                  "fieldName": "monthly_incremental_margin_pre",
+                  "displayName": "Jan-Mar",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Monthly incremental margin, Apr-Sep"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 2,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-anyway",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpi_coffee_anyway",
+                  "fields": [
+                    {
+                      "name": "would_happen_anyway",
+                      "expression": "`would_happen_anyway`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "would_happen_anyway",
+                  "displayName": "Coffee + Croissant redemptions that would happen anyway",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Coffee + Croissant redemptions that would happen anyway",
+                "description": "Holdout conversion / redemption rate, Apr-Sep",
+                "showDescription": true
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 2,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi-gain",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "kpi_targeting_gain",
+                  "fields": [
+                    {
+                      "name": "annual_gain_vs_blast",
+                      "expression": "`annual_gain_vs_blast`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "annual_gain_vs_blast",
+                  "displayName": "Annual gain from uplift targeting",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Annual gain from uplift targeting",
+                "description": "vs sending every offer to all eligible",
+                "showDescription": true
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 2,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "trend-spend-margin",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "spend_vs_margin_trend",
+                  "fields": [
+                    {
+                      "name": "month_end",
+                      "expression": "`month_end`"
+                    },
+                    {
+                      "name": "usd",
+                      "expression": "`usd`"
+                    },
+                    {
+                      "name": "measure",
+                      "expression": "`measure`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "line",
+              "encodings": {
+                "x": {
+                  "fieldName": "month_end",
+                  "scale": {
+                    "type": "temporal"
+                  },
+                  "displayName": "Month"
+                },
+                "y": {
+                  "fieldName": "usd",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "USD",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                },
+                "color": {
+                  "fieldName": "measure",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "Discount spend",
+                        "color": "#F47B20"
+                      },
+                      {
+                        "value": "Incremental margin",
+                        "color": "#008163"
+                      }
+                    ]
+                  },
+                  "displayName": "Measure"
+                }
+              },
+              "annotations": [
+                {
+                  "type": "vertical-line",
+                  "encodings": {
+                    "x": {
+                      "dataValue": "2026-04-01T00:00:00.000",
+                      "dataType": "DATETIME"
+                    },
+                    "label": {
+                      "value": "Send to all eligible"
+                    },
+                    "color": {
+                      "value": "#EE2526"
+                    }
+                  }
+                }
+              ],
+              "frame": {
+                "showTitle": true,
+                "title": "Discount spend vs incremental margin, by month"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 12,
+            "height": 6
+          }
+        }
+      ]
+    },
+    {
+      "name": "waste",
+      "displayName": "Where is the waste?",
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1",
+      "layout": [
+        {
+          "widget": {
+            "name": "p2-title",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Where is the waste?\n",
+                "\n",
+                "Redemption rate counts shoppers who would have bought anyway. Measured lift against the holdout shows what each offer really caused."
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "bar-redemption-lift",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "redemption_vs_lift",
+                  "fields": [
+                    {
+                      "name": "promotion",
+                      "expression": "`promotion`"
+                    },
+                    {
+                      "name": "rate",
+                      "expression": "`rate`"
+                    },
+                    {
+                      "name": "measure",
+                      "expression": "`measure`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "promotion",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Promotion"
+                },
+                "y": {
+                  "fieldName": "rate",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Rate",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  }
+                },
+                "color": {
+                  "fieldName": "measure",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "Redemption rate",
+                        "color": "#F47B20"
+                      },
+                      {
+                        "value": "Measured lift",
+                        "color": "#008163"
+                      }
+                    ]
+                  },
+                  "displayName": "Measure"
+                }
+              },
+              "mark": {
+                "layout": "group"
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Redemption rate vs measured lift, Apr-Sep"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "bar-margin-region",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "margin_by_region",
+                  "fields": [
+                    {
+                      "name": "region",
+                      "expression": "`region`"
+                    },
+                    {
+                      "name": "incremental_margin",
+                      "expression": "`incremental_margin`"
+                    },
+                    {
+                      "name": "promotion",
+                      "expression": "`promotion`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "region",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Region"
+                },
+                "y": {
+                  "fieldName": "incremental_margin",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Incremental margin",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                },
+                "color": {
+                  "fieldName": "promotion",
+                  "scale": {
+                    "type": "categorical"
+                  },
+                  "displayName": "Promotion"
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Incremental margin by region, Apr-Sep"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 2,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "bar-tier-lift",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "tier_backtest",
+                  "fields": [
+                    {
+                      "name": "tier",
+                      "expression": "`tier`"
+                    },
+                    {
+                      "name": "measured_uplift",
+                      "expression": "`measured_uplift`"
+                    },
+                    {
+                      "name": "promotion",
+                      "expression": "`promotion`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "tier",
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "custom-order",
+                      "orderedValues": [
+                        "Persuadable",
+                        "Low ROI",
+                        "Sure Thing",
+                        "Lost Cause"
+                      ]
+                    }
+                  },
+                  "displayName": "Model tier"
+                },
+                "y": {
+                  "fieldName": "measured_uplift",
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "displayName": "Measured lift",
+                  "format": {
+                    "type": "number-percent",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
+                },
+                "color": {
+                  "fieldName": "tier",
+                  "scale": {
+                    "type": "categorical",
+                    "mappings": [
+                      {
+                        "value": "Persuadable",
+                        "color": "#008163"
+                      },
+                      {
+                        "value": "Low ROI",
+                        "color": "#9AA5A8"
+                      },
+                      {
+                        "value": "Sure Thing",
+                        "color": "#F47B20"
+                      },
+                      {
+                        "value": "Lost Cause",
+                        "color": "#EE2526"
+                      }
+                    ]
+                  },
+                  "displayName": "Tier"
+                }
+              },
+              "facet": {
+                "type": "wrap",
+                "fieldName": "promotion",
+                "scale": {
+                  "type": "categorical"
+                },
+                "layout": {
+                  "column": {
+                    "type": "count",
+                    "value": 5
+                  }
+                }
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Measured lift by model tier, Apr-Sep sends",
+                "description": "Treatment minus holdout conversion. Persuadables move; sure things don't.",
+                "showDescription": true
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 8,
+            "width": 12,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "table-portfolio",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "portfolio",
+                  "fields": [
+                    {
+                      "name": "opportunity_rank",
+                      "expression": "`opportunity_rank`"
+                    },
+                    {
+                      "name": "promotion",
+                      "expression": "`promotion`"
+                    },
+                    {
+                      "name": "eligible_members",
+                      "expression": "`eligible_members`"
+                    },
+                    {
+                      "name": "persuadable_members",
+                      "expression": "`persuadable_members`"
+                    },
+                    {
+                      "name": "redemption_rate_apr_sep",
+                      "expression": "`redemption_rate_apr_sep`"
+                    },
+                    {
+                      "name": "measured_uplift_apr_sep",
+                      "expression": "`measured_uplift_apr_sep`"
+                    },
+                    {
+                      "name": "blast_net_margin_per_send",
+                      "expression": "`blast_net_margin_per_send`"
+                    },
+                    {
+                      "name": "targeted_net_margin_per_send",
+                      "expression": "`targeted_net_margin_per_send`"
+                    },
+                    {
+                      "name": "annual_opportunity_targeted",
+                      "expression": "`annual_opportunity_targeted`"
+                    },
+                    {
+                      "name": "status",
+                      "expression": "`status`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "opportunity_rank",
+                    "displayName": "Rank"
+                  },
+                  {
+                    "fieldName": "promotion",
+                    "displayName": "Promotion"
+                  },
+                  {
+                    "fieldName": "eligible_members",
+                    "displayName": "Eligible members"
+                  },
+                  {
+                    "fieldName": "persuadable_members",
+                    "displayName": "Persuadable members"
+                  },
+                  {
+                    "fieldName": "redemption_rate_apr_sep",
+                    "displayName": "Redemption rate",
+                    "format": {
+                      "type": "number-percent",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 0
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "measured_uplift_apr_sep",
+                    "displayName": "Measured lift",
+                    "format": {
+                      "type": "number-percent",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 1
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "blast_net_margin_per_send",
+                    "displayName": "Net margin / send: all eligible",
+                    "format": {
+                      "type": "number-currency",
+                      "currencyCode": "USD",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 0
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "targeted_net_margin_per_send",
+                    "displayName": "Net margin / send: uplift-targeted",
+                    "format": {
+                      "type": "number-currency",
+                      "currencyCode": "USD",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 0
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "annual_opportunity_targeted",
+                    "displayName": "Annual opportunity",
+                    "format": {
+                      "type": "number-currency",
+                      "currencyCode": "USD",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 0
+                      }
+                    }
+                  },
+                  {
+                    "fieldName": "status",
+                    "displayName": "Recommendation"
+                  }
+                ]
+              },
+              "frame": {
+                "showTitle": true,
+                "title": "Promotion portfolio"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 14,
+            "width": 12,
+            "height": 6
+          }
+        }
+      ]
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "canvasBackgroundColor": {
+        "light": "#FAFAF7",
+        "dark": "#1F272D"
+      },
+      "widgetBackgroundColor": {
+        "light": "#FFFFFF",
+        "dark": "#11171C"
+      },
+      "widgetBorderColor": {
+        "light": "#FFFFFF",
+        "dark": "#11171C"
+      },
+      "fontColor": {
+        "light": "#11171C",
+        "dark": "#E8ECF0"
+      },
+      "selectionColor": {
+        "light": "#2272B4",
+        "dark": "#8ACAFF"
+      },
+      "visualizationColors": [
+        "#008163",
+        "#F47B20",
+        "#3C6997",
+        "#EE2526",
+        "#FFB547",
+        "#7A9E9F",
+        "#594E90"
+      ],
+      "widgetHeaderAlignment": "LEFT"
+    }
+  }
+}

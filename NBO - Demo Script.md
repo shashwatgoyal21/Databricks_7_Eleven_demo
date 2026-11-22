@@ -1,86 +1,118 @@
-# Next Best Offer Decision Engine — Promotion Performance Demo
+# Real-Time Next Best Offer: The Right Offer While the Shopper Is Still in the Store
 
-> **What this is.** A fast, end-to-end demo of a Next Best Offer engine built on Databricks, using synthetic convenience-retail loyalty data. Promotion spend has tripled since April, but incremental margin went negative. The dashboard shows the problem, Genie explains it in plain English, and the optional **Next Best Offer app** shows marketers what they'd actually use: which offers to run, who to send them to, why each shopper gets the offer they get, and an Approve button that writes the decision back to Unity Catalog. Synthetic data → Lakeflow Jobs build → uplift model in MLflow → governed metric view → Databricks App + AI/BI Dashboard + Genie, with row filters and PII masks.
+> **What this is.** While a shopper is in the store, the system picks the promotion most likely to get that person to add to their basket and sends it to them right then. A data and AI engineering audience also fits that use case. They care about the hard parts: streaming in-store signals, serving features with low latency, scoring models in milliseconds and governing all of it on Databricks.
 
-All members, stores, and numbers in this demo are fictional. The build kit is in the `nbo-demo` folder.
+All shoppers, stores, and numbers in this demo are fictional. The build kit is in this folder; see `README.md`.
 
 ## The Story
 
 | | |
 | --- | --- |
-| **Company** | A fictional convenience retailer: 120 stores across Texas, California, Florida, and the Northeast, with a loyalty pilot of 25,000 members |
-| **Hero** | The **VP of Loyalty & Personalization**, asked to justify a promotion budget that has tripled |
-| **Question** | We're sending more offers than ever and redemption looks great. **Are we buying any extra sales?** |
-| **Investigation** | POS baskets, the loyalty CRM, the promotion catalog, and offer history with a 10% holdout on every send, unified in Unity Catalog. On **2026-04-01** the team stopped curating sends and started sending every offer to everyone eligible. Monthly discount spend went from **~$2.0K to ~$8.3K**. Monthly incremental margin went from **+$500 to −$2.3K**. Why? |
-| **Root cause** | Redemption rate counts everyone who used the offer, including shoppers who would have bought anyway. **Coffee + Croissant** redeems at **38%**, but the holdout shows **67% of those redemptions would have happened without the offer**: about 40% of morning commuters already add a pastry to most coffee visits. They redeem the most and are moved the least. |
-| **Impact** | Score every shopper twice, with and without the offer, and only send to the ones it moves. For Coffee + Croissant that turns **−$1.1K per send into +$700 per send**. Across the portfolio, about **$44K a year** on a 25,000-member pilot, scaling linearly with members. |
+| **Company** | A convenience retailer: 120 stores across Texas, California, Florida, and the Northeast, 25,000 loyalty shoppers in the pilot |
+| **Audience** | VP of Data Engineering, Head of Data Engineering, VP of AI Engineering |
+| **Moment** | A shopper who shares location with the retailer's app walks into a store. The app already sees this. |
+| **What has to happen** | Within a second, decide which of five promotions (or none) will make this person add to their basket, and get it onto their phone and the pin-pad before they reach the counter |
+| **Why it is hard** | The check-in has to stream in, the shopper's features have to be read in milliseconds, five uplift models have to be scored, live rules applied, and every decision logged and governed |
+| **How it works** | The retailer's app makes one API call to a Databricks Model Serving endpoint. Databricks returns the offer and the push text. The retailer's existing push tool delivers it. Nothing in their mobile or push stack is replaced. |
+| **Proof** | A 10% holdout on every decision. Shoppers the model calls Persuadable show about **+22 pts** measured lift; shoppers it calls Sure Thing show about **0**. Versus the static rules used today, that is about **$44K a year** on the pilot base, scaling with shoppers. |
+
+---
 
 ## Overview
 
-The demo date is **2026-09-30**. Basket history runs October 2025 → September 2026; offer history covers January → September 2026, one send per promotion per month, each with a 10% holdout. Until March, marketers hand-picked small segments. From April every offer went to everyone eligible. The holdout makes the real effect measurable: it is grounded in the data, not assumed. The uplift model is trained on the January–March sends and checked against April–September: members it calls **Persuadable** show **~+22 pts** measured lift on Coffee + Croissant; members it calls **Sure Thing** show **~0**.
+The live day is **2026-09-30**. About **8,300 check-ins** arrive across 120 stores. Each one is a shopper's loyalty ID, a store, and a time, plus the first item scanned and days since the last visit when the store knows them.
+
+The decision path, the same code everywhere it runs:
+
+1. **Check-in.** The retailer's app sees the shopper enter the store and calls the `nbo-decision` endpoint with `member_id`, `store_id`, and `event_ts`.
+2. **Features.** The endpoint reads the shopper's features (visit mix, category habits, recency) and the store's inventory from a Lakebase online store, kept in sync with Unity Catalog.
+3. **Score.** Two models per promotion estimate the chance of a purchase with and without the offer. The difference is the uplift.
+4. **Live rules.** Is it the right time of day? Did they already scan the item? Does this store have fresh bakery? Are they in the win-back window?
+5. **Pick one.** The offer with the highest expected net margin among those that move this shopper. If none pays back, no offer.
+6. **Hold out.** 1 in 10 check-ins gets no offer, so the effect is always measured.
+7. **Respond.** Offer, push title, push text, and reason go back to the caller. The request and response land in an inference table.
+
+Only about **18%** of check-ins get an offer. The other 80% are suppressed on purpose, because no offer would change what that shopper buys at that moment.
+
+---
 
 ## Key Numbers
 
 | Metric | Value |
 | --- | --- |
-| Loyalty members (pilot) | 25,000 |
-| POS baskets | ~3.3M, Oct 2025 → Sep 2026 |
-| Offers sent | ~187K, Jan → Sep 2026, 10% holdout each |
-| Policy change | 2026-04-01: send to all eligible |
-| Monthly discount spend | ~$2.0K (Jan–Mar) → ~$8.3K (Apr–Sep), +326% |
-| Monthly incremental margin | ~+$500 → ~−$2.3K |
-| Coffee + Croissant redemption rate | ~38% |
-| Coffee + Croissant redemptions that would happen anyway | ~67% |
-| Coffee + Croissant net margin per send | All eligible ~−$1.1K · Propensity-ranked ~−$1.5K · Uplift-targeted ~+$700 |
+| Shoppers / stores / promotions | 25,000 / 120 / 5 |
+| POS baskets for training | ~3.3M, Oct 2025 to Sep 2026 |
+| Live-day check-ins | ~8,300 (~70 per store) |
+| Check-ins that get an offer | ~18% |
+| Check-ins suppressed (no offer moves the shopper or fits the moment) | ~80% |
+| Holdout | 10% of check-ins |
+| Request the retailer's app sends | 3 required fields |
+| Round trip from the app, local preview | ~50 ms |
 | Measured lift, Persuadable vs Sure Thing | ~+22 pts vs ~0 pts |
-| Annual gain from uplift targeting | ~$44K on the pilot base |
-| Late-Night Energy $1 Off | No audience pays back: retire or redesign |
+| Static rules since Apr 1, monthly incremental margin | ~+$500 to ~-$2.3K |
+| Coffee + Croissant redemptions that would happen anyway under static rules | ~67% |
+| Annual gain, model vs static rules | ~$44K on the pilot base |
+
+---
 
 ## Demo Walkthrough
 
-**Frame:** *"Promotion spend has tripled since April. Let's see what it's buying on the dashboard, then ask Genie why, in plain English."*
+**Frame:** *"A shopper walks into a store. In the next second we need to decide which offer, if any, gets them to buy more, and get it to their phone. Here is the whole path on Databricks, end to end."*
 
-### 1. Spot the risk (1 min)
+### Act 1: A shopper walks in (2 min)
 
-Open the **AI/BI Dashboard**, page "Is promo spend working?". The KPI cards show monthly discount spend up from ~$2.0K to ~$8.3K since April, and monthly incremental margin, measured against the 10% holdout, down from ~+$500 to ~−$2.3K. The spend-vs-margin line shows the two crossing at the 2026-04-01 policy change. Redemption looks healthy, so nobody noticed.
+Open the **Databricks App**, tab **In-Store Live**. The store is already picked. The phone shows the one-time "Allow 7-Eleven to use your location?" prompt.
 
-### 2. Find the driver (1 min)
+Click **Next shopper walks in**. A commuter scans a coffee at 6:31am. The app sends the check-in to the endpoint, and the phone shows *"Your coffee is better with a croissant"* with the round trip in milliseconds. The pin-pad shows the same offer.
 
-Switch to page "Where is the waste?". The redemption-vs-lift bars single out **Coffee + Croissant**: the tallest redemption bar (~38%) with a short lift bar, because ~67% of its redemptions would have happened anyway. The tier chart shows the uplift model's Persuadables at ~+22 pts measured lift and Sure Things at ~0. The portfolio table shows uplift targeting turns Coffee + Croissant from ~−$1.1K to ~+$700 per send, and that Late-Night Energy $1 Off pays back for no audience.
+Click **Play 15 minutes**. Check-ins stream in. Most get no offer. The KPI row shows check-ins, offers sent, suppressed, held out, and p50/p95 round trip.
 
-### 3. Ask why, in Genie (1–2 min)
+If **Send real pushes** is on, the notification arrives on your own phone through the push service, the same way it would through the retailer's Braze, Airship, or OneSignal account.
 
-Open the **Genie space**. Ask *"Why did discount spend go up after April but incremental margin go down?"* → spend roughly tripled when every offer went to everyone eligible, and margin turned negative. *"Which promotion has the biggest gap between redemption rate and real lift?"* → Coffee + Croissant: about two thirds of redemptions would have happened anyway. *"What would targeting only persuadable shoppers be worth?"* → ~+$700 per send on Coffee + Croissant, ~$44K a year across the portfolio. Genie traces it across sends, holdouts, redemptions, and the model tiers.
+### Act 2: Why that offer (2 min)
 
-### Optional: act on it (2–3 min)
+Open **Decision Trace**. Pick *"Coffee scanned, gets the croissant offer"*. Show the check-in JSON, the shopper's features, and the table of all five promotions with their with-offer and without-offer scores, uplift, expected margin, and which live rules passed.
 
-If the audience wants to see the action layer, open the **Next Best Offer** Databricks App on the same tables. **Target Audience**: pick Coffee + Croissant and flip the strategy (all eligible ~−$1.1K, propensity ~−$1.5K, uplift ~+$700), then click **Approve** to write the decision to `campaign_approvals` in Unity Catalog. **Customer-Level View**: Kevin gets the offer (it moves him from 6% to 31%); Hannah doesn't (she already adds a pastry on 63% of coffee visits). For governance, sign in as a Texas marketing manager: the dashboard and Genie show Texas only, and names and emails come back as `***`.
+Switch to *"Coffee scanned, already buys pastries: no offer"*. Same moment, same scan, but this shopper adds a pastry most mornings anyway. The model calls them a Sure Thing. No discount is given away.
+
+Show the request and response JSON. Point out that the request is three fields.
+
+### Act 3: How it runs (2 min)
+
+Open **Under the Hood**. Walk the architecture:
+
+- Check-ins land through **Zerobus** (or Kafka) into the `instore_events` Delta table.
+- **Lakeflow** jobs keep `member_features` fresh, and it is published to a **Lakebase** online store.
+- The **Model Serving** endpoint `nbo-decision` serves one pyfunc: feature lookup, uplift scoring, live rules, holdout.
+- **AI Gateway** logs every request and response to the `nbo_decision_payload` inference table.
+- **Unity Catalog** governs all of it: lineage, row filters by region, PII masks, and grants.
+
+Show the latency budget table and the live row counts.
+
+### Act 4: Does it work? (1 min)
+
+Open **Does the Model Work?**. The holdout shows Persuadables at about +22 pts and Sure Things at about 0. The trend chart shows what static rules did from April 1: discount spend up, incremental margin negative. The model gets about $44K a year back on the pilot base.
+
+Optional: open the **AI/BI dashboard** page "Real-time decisions" (decisions by hour, why no offer, endpoint latency from the inference table), and ask **Genie** *"Why did most check-ins get no offer?"*
 
 ### Closing
 
-*"Your team sees what each promotion really earns, asks why in plain English, and acts on it in an app running inside your own Databricks workspace, on governed data, with every decision written back. It deploys from packaged code, so the next promotion, region, or brand is a configuration change, not a new project."*
+*"The retailer's app makes one call. Databricks decides in milliseconds, using fresh features and a governed model, and their existing push stack delivers it. Every decision is logged, held out, and measured, so you can prove what it earns."*
+
+---
 
 ## Products Showcased
 
 | Product | Mode | What it does in this demo |
 | --- | --- | --- |
-| Synthetic data generation | Build | Stores, loyalty members, POS baskets, promotion catalog, and offer history with holdouts |
-| Lakeflow Jobs | Build | Runs the build: raw tables → `member_features` → scores → gold tables |
-| MLflow + Unity Catalog model registry | Build | Two-model uplift learner per promotion, logged and registered as `nbo_uplift_model` |
-| Unity Catalog Metric View | Build | `metrics_promotions`: sends, redemptions, holdout rate, measured lift, discount spend, incremental margin |
-| Unity Catalog row filters and column masks | Build | Regional marketers see only their region; names and email masked without `loyalty_pii` |
-| Databricks Apps | Build | The Next Best Offer app: portfolio, audience targeting, 1-to-1 explanations, measurement, approve and write back |
-| AI/BI Dashboard | Build | Spend vs incremental margin, redemption rate vs measured lift, lift by model tier |
-| AI/BI Genie | Build | Natural-language "why", traced to Coffee + Croissant and sure-thing redemptions |
-| Databricks Asset Bundles | Build | Deploys the job, notebooks, and app into a new workspace in one command |
-| Lakeflow Connect | Talk track | How POS, loyalty CRM, and offer-platform data land in the lakehouse |
-| Model Serving | Talk track | Real-time scoring at the POS pin-pad and in the app as a basket is scanned |
-| Agent Bricks | Talk track | A promotions agent that drafts campaign briefs from the same governed data |
-| Genie on Databricks One | Talk track | The same Genie space for loyalty leaders on their phone |
-
-## Before recording
-
-- Read the numbers off the app and dashboard after the first build and update the tables above. Step 3 prints them.
-- Swap in the source systems, promotion names, and access groups the client actually uses.
-- Record the walkthrough as a video of 5 minutes or less.
-- Keep a copy of the synthetic workspace a Databricks SA can run without us on the call.
+| **Model Serving** | Build | `nbo-decision` endpoint: one check-in in, one offer out, in milliseconds |
+| **Feature Engineering + Lakebase online store** | Build | `member_features` and `stores` served by key with continuous sync |
+| **MLflow + Unity Catalog model registry** | Build | Uplift learners and the `nbo_decision_service` pyfunc, `@prod` alias |
+| **AI Gateway inference tables** | Build | Every request and response logged to `nbo_decision_payload` |
+| **Structured Streaming** | Build | `05_stream_decisions`: the same decision path over the check-in stream, written to `offer_decisions` |
+| **Lakeflow Jobs** | Build | Data, features, training, streaming, endpoint, and governance in one job |
+| **Unity Catalog** | Build | Row filter by region, PII mask, metric view `metrics_promotions`, lineage, grants |
+| **Databricks Apps** | Build | Live console: walk-in simulator, real push, decision trace, architecture |
+| **AI/BI Dashboard and Genie** | Build | Decisions, suppression reasons, latency, and lift, on the same governed data |
+| **Declarative Automation Bundles** | Build | Deploys the whole thing to a new workspace in one command |
+| **Zerobus** | Talk track | Direct ingest of check-ins from the app backend into Delta |

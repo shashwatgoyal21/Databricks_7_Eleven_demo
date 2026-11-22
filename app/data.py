@@ -1,11 +1,16 @@
-"""Data access for the NBO app.
+"""Data access for the real-time NBO app.
 
 On Databricks: queries Unity Catalog tables through the SQL warehouse attached to the app
-(DATABRICKS_WAREHOUSE_ID) and writes campaign approvals back to a Delta table.
+(DATABRICKS_WAREHOUSE_ID) and appends every decision the app makes to `live_decision_log`.
 Locally: set NBO_LOCAL_DATA to the folder written by local_run.py.
+
+Production path (talk track): member features and uplift scores are served from a Lakebase synced
+table / online feature store, and the decision runs behind a Model Serving endpoint. The app reads
+the same Unity Catalog tables through the warehouse, prefetching one store's shoppers at a time.
 """
 
 import os
+import time
 from datetime import datetime, timezone
 from pathlib import Path
 
@@ -15,7 +20,14 @@ import streamlit as st
 SCHEMA = os.getenv("NBO_SCHEMA", "workspace.nbo_demo")
 LOCAL_DIR = os.getenv("NBO_LOCAL_DATA")
 LOCAL = bool(LOCAL_DIR)
-APPROVALS_CSV = Path(LOCAL_DIR or ".") / "campaign_approvals.csv"
+LOG_CSV = Path(LOCAL_DIR or ".") / "live_decision_log.csv"
+ENDPOINT = os.getenv("NBO_ENDPOINT", "")
+
+
+PROFILE_COLS = ["member_id", "first_name", "last_name", "crm_segment", "region", "home_store_id", "tenure_months",
+                "app_user", "marketing_opt_in", "visits", "visits_per_active_week", "avg_basket_value",
+                "coffee_rate", "pastry_with_coffee_rate", "morning_share", "midday_share", "afternoon_share",
+                "late_night_share", "roller_grill_rate", "sandwich_rate", "energy_drink_rate"]
 
 
 @st.cache_resource
@@ -37,6 +49,10 @@ def _query(sql_text, params=None):
         return cur.fetchall_arrow().to_pandas()
 
 
+def _local(name):
+    return pd.read_parquet(Path(LOCAL_DIR) / f"{name}.parquet")
+
+
 def source_label():
     if LOCAL:
         return f"Local preview from `{LOCAL_DIR}`"
@@ -45,84 +61,106 @@ def source_label():
 
 @st.cache_data(ttl=600)
 def table(name):
-    """Gold tables, read whole. Locally this includes member_offer_scores and member_profile."""
+    """Small gold tables, read whole."""
     if LOCAL:
-        return pd.read_parquet(Path(LOCAL_DIR) / f"{name}.parquet")
+        return _local(name)
     return _query(f"SELECT * FROM {SCHEMA}.{name}")
 
 
-def _rows(name, eligible_only=False, **equals):
-    """Rows of a table matching column = value filters, pushed down to the warehouse on Databricks."""
+@st.cache_data(ttl=600)
+def stores_by_traffic():
+    """Stores with check-in counts on the live day, busiest first."""
     if LOCAL:
-        t = table(name)
-        mask = t.eligible if eligible_only else pd.Series(True, index=t.index)
-        for col, value in equals.items():
-            mask &= t[col] == value
-        return t[mask].reset_index(drop=True)
-    where = " AND ".join([f"{col} = :{col}" for col in equals] + (["eligible"] if eligible_only else []))
-    return _query(f"SELECT * FROM {SCHEMA}.{name} WHERE {where}", equals)
+        ev = _local("instore_events")
+        st_ = _local("stores")
+        c = ev.groupby("store_id").size().rename("check_ins").reset_index()
+        return c.merge(st_, on="store_id").sort_values("check_ins", ascending=False).reset_index(drop=True)
+    return _query(f"""SELECT e.store_id, COUNT(*) AS check_ins, s.region, s.city, s.has_fresh_bakery
+                      FROM {SCHEMA}.instore_events e JOIN {SCHEMA}.stores s USING (store_id)
+                      GROUP BY e.store_id, s.region, s.city, s.has_fresh_bakery
+                      ORDER BY check_ins DESC""")
 
 
 @st.cache_data(ttl=600)
-def promotion_scores(promotion_id):
-    return _rows("member_offer_scores", eligible_only=True, promotion_id=promotion_id)
+def store_feed(store_id):
+    """Everything the decision path needs for one store's live day, fetched once:
+    the check-in stream, the shoppers' uplift scores (all promotions), and their profiles.
+    Returns (events, scores, profiles, fetch_ms)."""
+    t0 = time.perf_counter()
+    if LOCAL:
+        ev = _local("instore_events")
+        ev = ev[ev.store_id == store_id].sort_values("event_ts").reset_index(drop=True)
+        ids = set(ev.member_id)
+        sc = _local("member_offer_scores")
+        sc = sc[sc.member_id.isin(ids)].reset_index(drop=True)
+        pr = _local("member_profile")
+        pr = pr[pr.member_id.isin(ids)][PROFILE_COLS].reset_index(drop=True)
+    else:
+        p = {"store_id": int(store_id)}
+        sub = f"SELECT DISTINCT member_id FROM {SCHEMA}.instore_events WHERE store_id = :store_id"
+        ev = _query(f"SELECT * FROM {SCHEMA}.instore_events WHERE store_id = :store_id ORDER BY event_ts", p)
+        sc = _query(f"""SELECT member_id, promotion_id, eligible, p_without_offer, p_with_offer, uplift,
+                               expected_net_margin, tier, reason
+                        FROM {SCHEMA}.member_offer_scores WHERE member_id IN ({sub})""", p)
+        pr = _query(f"SELECT {', '.join(PROFILE_COLS)} FROM {SCHEMA}.member_profile WHERE member_id IN ({sub})", p)
+    ev["event_ts"] = pd.to_datetime(ev.event_ts)
+    return ev, sc, pr, (time.perf_counter() - t0) * 1000
 
 
 @st.cache_data(ttl=600)
-def member(member_id):
-    """Profile row and all offer scores for one member, or (None, None)."""
-    p = _rows("member_profile", member_id=member_id)
-    if p.empty:
-        return None, None
-    return p.iloc[0], _rows("member_offer_scores", member_id=member_id)
-
-
-def current_user():
-    try:
-        return st.context.headers.get("X-Forwarded-Email") or "demo.user@local"
-    except Exception:
-        return "demo.user@local"
-
-
-@st.cache_data(ttl=60)
-def approvals():
+def event_bundle(event_id):
+    """One check-in with its shopper's scores and profile, for the decision trace."""
     if LOCAL:
-        return pd.read_csv(APPROVALS_CSV) if APPROVALS_CSV.exists() else pd.DataFrame()
-    try:
-        return _query(f"SELECT * FROM {SCHEMA}.campaign_approvals ORDER BY approved_at DESC LIMIT 20")
-    except Exception:
-        return pd.DataFrame()
+        ev = _local("instore_events")
+        ev = ev[ev.event_id == event_id].reset_index(drop=True)
+        if ev.empty:
+            return None, None, None
+        mid = int(ev.member_id.iloc[0])
+        sc = _local("member_offer_scores")
+        pr = _local("member_profile")
+        return ev, sc[sc.member_id == mid].reset_index(drop=True), pr[pr.member_id == mid][PROFILE_COLS]
+    p = {"event_id": int(event_id)}
+    ev = _query(f"SELECT * FROM {SCHEMA}.instore_events WHERE event_id = :event_id", p)
+    if ev.empty:
+        return None, None, None
+    m = {"member_id": int(ev.member_id.iloc[0])}
+    sc = _query(f"SELECT * FROM {SCHEMA}.member_offer_scores WHERE member_id = :member_id", m)
+    pr = _query(f"SELECT {', '.join(PROFILE_COLS)} FROM {SCHEMA}.member_profile WHERE member_id = :member_id", m)
+    ev["event_ts"] = pd.to_datetime(ev.event_ts)
+    return ev, sc, pr
 
 
-def approve(row):
-    """Record an approved campaign. On Databricks this lands in a Delta table that a downstream
-    activation job (Braze, the POS offer service, ...) would pick up."""
-    row = {**row, "approved_by": current_user(),
-           "approved_at": datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S"), "status": "Approved"}
-    approvals.clear()
+@st.cache_data(ttl=600)
+def table_counts(names):
+    """Row counts for the pipeline view."""
     if LOCAL:
-        pd.DataFrame([row]).to_csv(APPROVALS_CSV, mode="a", header=not APPROVALS_CSV.exists(), index=False)
-        return
-    _query(
-        f"""INSERT INTO {SCHEMA}.campaign_approvals
-            (promotion_id, promotion_name, strategy, audience_size, expected_redemptions,
-             expected_discount_cost, expected_net_margin, channel, approved_by, approved_at, status)
-            VALUES (:promotion_id, :promotion_name, :strategy, :audience_size, :expected_redemptions,
-                    :expected_discount_cost, :expected_net_margin, :channel, :approved_by,
-                    CAST(:approved_at AS TIMESTAMP), :status)""",
-        row,
-    )
+        return {n: len(_local(n)) if (Path(LOCAL_DIR) / f"{n}.parquet").exists() else None for n in names}
+    out = {}
+    for n in names:
+        try:
+            out[n] = int(_query(f"SELECT COUNT(*) AS n FROM {SCHEMA}.{n}").n.iloc[0])
+        except Exception:
+            out[n] = None
+    return out
 
 
-# ---------------------------------------------------------------------------
-# Genie
-# ---------------------------------------------------------------------------
+@st.cache_resource
+def _local_service():
+    """Local stand-in for the endpoint: same learners and code, features read from parquet."""
+    import pickle
 
-GENIE_SPACE_ID = os.getenv("GENIE_SPACE_ID", "").strip()
+    import nbo_decision as nd
+
+    with open(Path(LOCAL_DIR) / "uplift_learners.pkl", "rb") as fh:
+        models = pickle.load(fh)
+    feats = _local("member_features").set_index("member_id")[
+        nd.MODEL_FEATURES + ["marketing_opt_in", "days_since_last_visit"]]
+    return models, feats
 
 
-def genie_enabled():
-    return bool(GENIE_SPACE_ID) and not LOCAL
+@st.cache_resource
+def _local_stores():
+    return _local("stores").set_index("store_id")[["has_fresh_bakery", "region", "city"]]
 
 
 @st.cache_resource
@@ -130,6 +168,13 @@ def _workspace():
     from databricks.sdk import WorkspaceClient
 
     return WorkspaceClient()
+
+
+GENIE_SPACE_ID = os.getenv("GENIE_SPACE_ID", "").strip()
+
+
+def genie_enabled():
+    return bool(GENIE_SPACE_ID) and not LOCAL
 
 
 def ask_genie(question):
@@ -155,3 +200,72 @@ def ask_genie(question):
     if not out["texts"] and not out["queries"]:
         out["texts"].append("Genie returned no answer. Try rephrasing the question.")
     return out
+
+
+def endpoint_label():
+    if LOCAL:
+        return "in-process copy of the decision service (local preview)"
+    return f"Model Serving endpoint `{ENDPOINT}`" if ENDPOINT else "in-app fallback"
+
+
+def call_decision_service(event):
+    """Send one check-in to the real-time decision service. Returns (request, response dict, round-trip ms)
+    or (request, None, ms) if the service is unavailable."""
+    import nbo_decision as nd
+
+    req = {c: event[c] for c in nd.CHECKIN_FIELDS}
+    req = {k: (v.item() if hasattr(v, "item") else v) for k, v in req.items()}
+    req["event_ts"] = pd.Timestamp(req["event_ts"]).strftime("%Y-%m-%d %H:%M:%S")
+    t0 = time.perf_counter()
+    try:
+        if LOCAL:
+            models, feats = _local_service()
+            if req["member_id"] not in feats.index:
+                return req, None, 0.0
+            store = _local_stores().loc[[req["store_id"]]].reset_index(drop=True)
+            row = pd.concat([pd.DataFrame([req]), feats.loc[[req["member_id"]]].reset_index(drop=True), store],
+                            axis=1)
+            resp = nd.score_and_decide(row, models).iloc[0].to_dict()
+        elif ENDPOINT:
+            out = _workspace().serving_endpoints.query(name=ENDPOINT, dataframe_records=[req])
+            preds = out.predictions
+            resp = preds[0] if isinstance(preds, list) else pd.DataFrame(preds).iloc[0].to_dict()
+        else:
+            return req, None, 0.0
+    except Exception as e:
+        st.session_state["endpoint_error"] = str(e).splitlines()[0][:200]
+        return req, None, (time.perf_counter() - t0) * 1000
+    return req, resp, (time.perf_counter() - t0) * 1000
+
+
+def current_user():
+    try:
+        return st.context.headers.get("X-Forwarded-Email") or "demo.user@local"
+    except Exception:
+        return "demo.user@local"
+
+
+def log_decisions(rows):
+    """Append decisions made in this app session to live_decision_log (Unity Catalog on Databricks)."""
+    if not rows:
+        return
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    df = pd.DataFrame(rows).assign(logged_by=current_user(), logged_at=now)
+    if LOCAL:
+        df.to_csv(LOG_CSV, mode="a", header=not LOG_CSV.exists(), index=False)
+        return
+    try:
+        values, params = [], {}
+        for i, r in enumerate(df.to_dict("records")):
+            keys = ["event_id", "store_id", "member_id", "decision", "promotion_id", "channel", "latency_ms",
+                    "logged_by", "logged_at"]
+            values.append("(" + ", ".join(f":{k}{i}" if k != "logged_at" else f"CAST(:{k}{i} AS TIMESTAMP)"
+                                          for k in keys) + ")")
+            for k in keys:
+                v = r.get(k)
+                params[f"{k}{i}"] = None if pd.isna(v) else (v.item() if hasattr(v, "item") else v)
+        _query(f"""INSERT INTO {SCHEMA}.live_decision_log
+                   (event_id, store_id, member_id, decision, promotion_id, channel, latency_ms, logged_by, logged_at)
+                   VALUES {", ".join(values)}""", params)
+    except Exception as e:  # logging must never break the live demo
+        st.toast(f"Decision log write skipped: {str(e).splitlines()[0][:120]}")

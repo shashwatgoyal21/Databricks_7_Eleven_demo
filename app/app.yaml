@@ -4,8 +4,18 @@ env:
     valueFrom: sql-warehouse
   - name: NBO_SCHEMA
     value: workspace.nbo_demo
+  - name: NBO_ENDPOINT
+    value: nbo-decision
   - name: NBO_BRAND
     value: "7-Eleven"
-  # Filled in by DEPLOY.md step 7 once the Genie space exists. Empty = the Ask Genie tab shows setup help.
+  # Set once the Genie space exists. Empty = the Ask Genie tab shows setup help.
   - name: GENIE_SPACE_ID
     value: ""
+  # Push delivery through the retailer's existing stack (see README, "Push delivery").
+  # Demo: NBO_PUSH_PROVIDER=ntfy, NBO_PUSH_URL=https://ntfy.sh/<your topic>
+  - name: NBO_PUSH_PROVIDER
+    value: ""
+  - name: NBO_PUSH_URL
+    value: ""
+  # - name: NBO_PUSH_API_KEY
+  #   valueFrom: push-api-key        # secret resource for Braze / Airship / OneSignal

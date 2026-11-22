@@ -10,12 +10,14 @@
 # MAGIC - `member_offer_scores`: every member × promotion with likelihood to buy with and without the
 # MAGIC   offer, lift, expected net margin, tier (Persuadable, Sure Thing, Lost Cause, Low ROI), and the
 # MAGIC   next best offer.
-# MAGIC - Gold tables read by the app, dashboard, and Genie: `promo_monthly`, `promo_portfolio`,
-# MAGIC   `audience_tiers`, `tier_backtest`, `member_profile`, `featured_members`.
+# MAGIC - Gold tables read by the decision path, app, dashboard, and Genie: `promo_monthly`,
+# MAGIC   `promo_portfolio`, `audience_tiers`, `tier_backtest`, `member_profile`, `featured_events`.
+# MAGIC - `member_offer_scores` is the table the real-time decision path looks up by `member_id`. In
+# MAGIC   production it is synced to an online table (Lakebase) for millisecond reads.
 
 # COMMAND ----------
 
-# MAGIC %pip install -q scikit-learn
+# MAGIC %pip install -q scikit-learn==1.5.2
 
 # COMMAND ----------
 
@@ -39,7 +41,9 @@ import pandas as pd
 sys.path.insert(0, os.getcwd())
 import nbo_lib  # noqa: E402
 
-raw = {name: spark.table(f"{fq}.{name}").toPandas() for name in ["loyalty_members", "promotions", "offer_history"]}
+raw = {name: spark.table(f"{fq}.{name}").toPandas()
+       for name in ["loyalty_members", "promotions", "offer_history", "instore_events"]}
+raw["instore_events"]["event_ts"] = pd.to_datetime(raw["instore_events"]["event_ts"])
 for name, cols in nbo_lib.RAW_DATE_COLS.items():
     for c in cols:
         raw[name][c] = pd.to_datetime(raw[name][c])
@@ -48,7 +52,7 @@ basket_cols = ["member_id", "basket_ts", "daypart", "basket_value"] + [f"has_{c}
 baskets = spark.table(f"{fq}.pos_baskets").select(*basket_cols).toPandas()
 baskets["basket_ts"] = pd.to_datetime(baskets.basket_ts)
 
-# Train on behaviour before the April policy change; score on the full 12 months to 2026-09-30
+# Train on behaviour before the April rules change; score on the full 12 months to 2026-09-30
 train_f, score_f = nbo_lib.feature_windows(baskets, raw["loyalty_members"])
 del baskets
 print(f"Features: {len(score_f):,} members")
@@ -97,7 +101,7 @@ with mlflow.start_run(run_name="t-learner-uplift") as run:
     signature = infer_signature(example, wrapped.predict(None, example))
     try:
         mlflow.pyfunc.log_model(artifact_path="uplift_model", python_model=wrapped, signature=signature,
-                                input_example=example, pip_requirements=["scikit-learn", "pandas"],
+                                input_example=example, pip_requirements=["scikit-learn==1.5.2", "pandas"],
                                 registered_model_name=f"{fq}.nbo_uplift_model")
         print(f"Registered {fq}.nbo_uplift_model")
     except Exception as e:
@@ -109,6 +113,15 @@ with mlflow.start_run(run_name="t-learner-uplift") as run:
     bt = gold["tier_backtest"]
     for row in bt.itertuples():
         mlflow.log_metric(f"{row.promotion_id}_{row.tier.replace(' ', '_')}_measured_uplift", row.measured_uplift)
+
+# COMMAND ----------
+
+# Save the fitted learners for the real-time decision endpoint (notebook 06)
+import pickle
+
+spark.sql(f"CREATE VOLUME IF NOT EXISTS {fq}.artifacts")
+with open(f"/Volumes/{catalog}/{schema}/artifacts/uplift_learners.pkl", "wb") as fh:
+    pickle.dump({pid: {"treated": m["treated"], "control": m["control"]} for pid, m in models.items()}, fh)
 
 # COMMAND ----------
 

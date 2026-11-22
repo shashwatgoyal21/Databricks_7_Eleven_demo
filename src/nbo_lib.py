@@ -1,25 +1,42 @@
-"""Simulation, features, uplift model, and gold tables for the Next Best Offer demo.
+"""Simulation, features, uplift model, real-time in-store decisioning, and gold tables for the
+Next Best Offer demo.
 
-Pure numpy / pandas / scikit-learn, so the same code runs in the Databricks notebooks and locally
-(see local_run.py). All members, stores, and numbers are fictional.
+While a shopper is in the store, the system picks the promotion most likely to get that person to
+add to their basket and sends it to them right then (app push and POS pin-pad).
 
-The story is built into the simulation. On 2026-04-01 the loyalty team moved from small curated
-sends to sending every offer to everyone eligible. Discount spend jumped, but incremental margin
-did not, because most of the new recipients were "sure things": shoppers who already buy the
-promoted item. The clearest case is the Morning Coffee + Croissant bundle: about 40% of morning
-commuters already add a pastry to most coffee visits. They redeem the most and are moved the least.
-Every promotion keeps a 10% holdout, so the true uplift is measurable from the data.
+Pure numpy / pandas / scikit-learn, so the same code runs in the Databricks notebooks, the
+streaming decision job, and locally (see local_run.py). All members, stores, and numbers are fictional.
+
+History built into the simulation: Jan-Mar 2026 in-store offers ran as a curated pilot. On
+2026-04-01 a static rules engine started showing every eligible offer at every check-in. Discount
+spend jumped, but incremental margin did not, because most shoppers who got an offer were "sure
+things" who already buy the promoted item. The clearest case is Coffee + Croissant: about 40% of
+morning commuters already add a pastry to most coffee visits. Every offer keeps a 10% holdout, so
+the true uplift is measurable, and the uplift model trained on it is what the real-time decision
+path scores in the store.
 """
 
 import numpy as np
 import pandas as pd
+
+# The real-time decision path lives with the app (the decision service) and is shared here, so
+# batch scoring, the streaming decision job, and the app apply exactly the same rules.
+import os as _os
+import sys as _sys
+
+_sys.path.insert(0, _os.path.join(_os.path.dirname(_os.path.abspath(__file__)), "..", "app"))
+from nbo_decision import (  # noqa: E402,F401
+    CONTEXT_RULE, LIVE_HOLDOUT_MOD, LOST_CAUSE_RESPONSE, MIN_NET_MARGIN, MIN_UPLIFT, MODEL_FEATURES,
+    OFFER_MESSAGE, PROMO_ECONOMICS, SURE_THING_BASELINE, assign_tier, behaviour_eligible, checkin_id, context_ok, decide,
+    offer_candidates, score_and_decide,
+)
 
 DEMO_DATE = pd.Timestamp("2026-09-30")
 HISTORY_START = pd.Timestamp("2025-10-01")
 HISTORY_DAYS = (DEMO_DATE - HISTORY_START).days + 1
 PRE_END = pd.Timestamp("2026-03-31")
 POLICY_CHANGE = pd.Timestamp("2026-04-01")
-SEND_POLICY_PRE, SEND_POLICY_POST = "Curated sends (Jan-Mar)", "All eligible (Apr-Sep)"
+SEND_POLICY_PRE, SEND_POLICY_POST = "Curated pilot (Jan-Mar)", "Static rules, all eligible (Apr-Sep)"
 HERO_PROMOTION = "PR01"  # the promotion the demo story is told through
 WAVE_MONTHS = pd.period_range("2026-01", "2026-09", freq="M")
 WAVE_DAY = 5
@@ -66,29 +83,31 @@ PROMOTIONS = pd.DataFrame([
     {"promotion_id": "PR01", "promotion_name": "Morning Coffee + Croissant Bundle ($1.50 Off)",
      "short_name": "Coffee + Croissant", "category": "Fresh Bakery & Hot Beverages",
      "objective": "Basket expansion & bakery waste reduction", "discount_cost": 1.50, "unit_margin": 3.20,
-     "default_channel": "POS pin-pad + app banner",
+     "default_channel": "App push + POS pin-pad",
      "eligibility_rule": "Buys coffee on 35%+ of visits, 40%+ of visits in the morning, active in the last 14 days"},
     {"promotion_id": "PR02", "promotion_name": "Free Slurpee Win-Back (14+ Days Inactive)",
      "short_name": "Slurpee Win-Back", "category": "Cold Dispensed",
      "objective": "Churn prevention", "discount_cost": 1.10, "unit_margin": 3.40,
-     "default_channel": "Push + SMS",
+     "default_channel": "App push + POS pin-pad",
      "eligibility_rule": "No visit in 14 to 90 days"},
     {"promotion_id": "PR03", "promotion_name": "BOGO 50% Off Roller Grill Taquitos",
      "short_name": "Taquito BOGO", "category": "Hot Foods",
      "objective": "Afternoon traffic builder", "discount_cost": 0.75, "unit_margin": 2.80,
-     "default_channel": "Geofenced app push",
+     "default_channel": "App push + POS pin-pad",
      "eligibility_rule": "30%+ of visits in the afternoon, active in the last 14 days"},
     {"promotion_id": "PR04", "promotion_name": "2x Loyalty Points on Fresh Sandwiches",
      "short_name": "2x Sandwich Points", "category": "Fresh Food",
      "objective": "Margin mix shift", "discount_cost": 0.80, "unit_margin": 2.30,
-     "default_channel": "App deals tab + email",
+     "default_channel": "App push + POS pin-pad",
      "eligibility_rule": "30%+ of visits at midday, active in the last 14 days"},
     {"promotion_id": "PR05", "promotion_name": "$1 Off Energy Drinks (Late Night)",
      "short_name": "Late-Night Energy $1 Off", "category": "Packaged Beverages",
      "objective": "Late-night basket add-on", "discount_cost": 1.00, "unit_margin": 1.40,
-     "default_channel": "App push (after 9 PM)",
+     "default_channel": "App push + POS pin-pad",
      "eligibility_rule": "25%+ of visits late at night, active in the last 14 days"},
 ])
+
+assert all(PROMO_ECONOMICS[r.promotion_id] == (r.unit_margin, r.discount_cost) for r in PROMOTIONS.itertuples())
 
 FIRST = ["Alex", "Maria", "James", "Priya", "Marcus", "Sofia", "Daniel", "Aisha", "Kevin", "Lucia",
          "Ryan", "Mei", "Carlos", "Hannah", "Tyler", "Fatima", "Jordan", "Elena", "Brandon", "Grace",
@@ -97,18 +116,7 @@ LAST = ["Rivera", "Nguyen", "Smith", "Patel", "Johnson", "Garcia", "Kim", "Willi
         "Chen", "Davis", "Martinez", "Wilson", "Hernandez", "Moore", "Taylor", "Thomas", "Clark", "Lewis",
         "Walker", "Young", "Allen", "Scott", "Green", "Baker", "Adams", "Nelson", "Hill", "Campbell"]
 
-MODEL_FEATURES = [
-    "visits_per_active_week", "morning_share", "midday_share", "afternoon_share", "evening_share",
-    "late_night_share", "coffee_rate", "pastry_rate", "pastry_with_coffee_rate", "roller_grill_rate",
-    "sandwich_rate", "energy_drink_rate", "cold_dispensed_rate", "avg_basket_value",
-    "tenure_months", "app_user",
-]
 
-# Decision thresholds applied to model scores
-MIN_UPLIFT = 0.04
-MIN_NET_MARGIN = 0.05
-SURE_THING_BASELINE = 0.35
-LOST_CAUSE_RESPONSE = 0.10
 
 TIER_ORDER = ["Persuadable", "Sure Thing", "Lost Cause", "Low ROI"]
 TIER_ACTION = {
@@ -217,7 +225,8 @@ def simulate(members=25_000, seed=711):
         **{f"has_{c}": flags[order, i] for i, c in enumerate(CATEGORIES)},
     })
 
-    # Offer waves: one send per promotion per month, 10% holdout in every wave
+    # In-store offer history: each month, each eligible shopper is served each offer once at an
+    # in-store check-in (app or pin-pad). 10% of those check-ins are held out and get no offer.
     late_night = seg_idx == SEGMENT_NAMES.index("Late-Night Regular")
     snacker = seg_idx == SEGMENT_NAMES.index("Afternoon Snacker")
     lunch = seg_idx == SEGMENT_NAMES.index("Lunch Regular")
@@ -267,15 +276,15 @@ def simulate(members=25_000, seed=711):
             idx = np.where(eligible & opt_in)[0]
             base, upl = truth(pid, idx, wave_day)
             if sent < POLICY_CHANGE:
-                # Curated sends: marketers hand-pick segments, so the members picked lean towards
-                # the ones the offer actually moves
+                # Curated pilot: offers were hand-configured for small groups, so the shoppers who got
+                # them lean towards the ones the offer actually moves
                 pays = upl * promo.at[pid, "unit_margin"] > (base + upl) * promo.at[pid, "discount_cost"]
                 pick = rng.random(idx.size) < np.where(pays, CURATED_PICK[0], CURATED_PICK[1])
                 idx, base, upl = idx[pick], base[pick], upl[pick]
             control = rng.random(idx.size) < HOLDOUT
             p_buy = np.clip(np.where(control, base, base + upl), 0, 0.97)
             converted = rng.random(idx.size) < p_buy
-            channel = np.where(app_user[idx], "App push", "Email")
+            channel = np.where(app_user[idx], "App push + POS pin-pad", "POS pin-pad")
             discount = np.where(~control & converted, promo.at[pid, "discount_cost"], 0.0)
             offers.append(pd.DataFrame({
                 "offer_event_id": np.arange(event_id, event_id + idx.size, dtype=np.int64),
@@ -411,12 +420,7 @@ def score_members(models, features):
         }))
     s = pd.concat(frames, ignore_index=True)
 
-    tier = np.select(
-        [(s.expected_net_margin > MIN_NET_MARGIN) & (s.uplift >= MIN_UPLIFT),
-         (s.p_without_offer >= SURE_THING_BASELINE) & (s.uplift < MIN_UPLIFT + 0.02),
-         s.p_with_offer < LOST_CAUSE_RESPONSE],
-        ["Persuadable", "Sure Thing", "Lost Cause"], default="Low ROI")
-    s["tier"] = np.where(s.eligible, tier, "Ineligible")
+    s["tier"] = np.where(s.eligible, assign_tier(s), "Ineligible")
 
     rank_key = np.where(s.tier == "Persuadable", s.expected_net_margin, -np.inf)
     s["rank"] = (pd.Series(rank_key).groupby(s.member_id).rank(ascending=False, method="first")
@@ -463,6 +467,55 @@ def _reasons(s, features):
             r.append(f"{sig}. {lift} does not cover the discount")
     reasons[el.index] = r
     return reasons
+
+
+
+# ---------------------------------------------------------------------------
+# Live in-store check-in stream (replay of the demo day)
+# ---------------------------------------------------------------------------
+
+LIVE_DATE = DEMO_DATE
+SCAN_ORDER = ["coffee", "sandwich", "roller_grill", "energy_drink", "cold_dispensed", "packaged_beverage",
+              "snacks"]  # pastry is never the first scan: it is what Coffee + Croissant adds
+SCAN_LABEL = {"coffee": "Hot coffee", "sandwich": "Fresh sandwich", "roller_grill": "Roller grill item",
+              "energy_drink": "Energy drink", "cold_dispensed": "Slurpee", "packaged_beverage": "Bottled drink",
+              "snacks": "Snack"}
+
+
+def instore_events(raw, day=LIVE_DATE):
+    """One check-in event per basket on `day`, in time order: the replay stream for the live demo."""
+    b = raw["pos_baskets"]
+    lm = raw["loyalty_members"].set_index("member_id")
+    st = raw["stores"].set_index("store_id")
+    prev = b.groupby("member_id").basket_ts.shift(1)
+    d = b[b.basket_ts.dt.normalize() == day].copy()
+    d["days_since_prev_visit"] = ((d.basket_ts.dt.normalize() - prev.loc[d.index].dt.normalize()).dt.days
+                                  .fillna(999).astype(int))
+    first = np.full(len(d), "snacks", dtype=object)
+    for c in reversed(SCAN_ORDER):
+        first = np.where(d[f"has_{c}"].to_numpy(), c, first)
+    app = lm.app_user.reindex(d.member_id).to_numpy()
+    # Check-in happens a few minutes before checkout
+    lead = pd.to_timedelta((d.basket_id.to_numpy() % 7) + 2, unit="m")
+    ev = pd.DataFrame({
+        "event_id": np.arange(1, len(d) + 1, dtype=np.int64),
+        "event_ts": (d.basket_ts - lead).to_numpy(),
+        "member_id": d.member_id.to_numpy(),
+        "store_id": d.store_id.to_numpy(),
+        "region": st.region.reindex(d.store_id).to_numpy(),
+        "city": st.city.reindex(d.store_id).to_numpy(),
+        "store_has_fresh_bakery": st.has_fresh_bakery.reindex(d.store_id).to_numpy(),
+        "trigger": np.where(app, "Shared location: entered store", "Loyalty ID scan at pin-pad"),
+        "daypart": d.daypart.to_numpy(),
+        "first_scan": first,
+        "first_scan_label": pd.Series(first).map(SCAN_LABEL).to_numpy(),
+        "days_since_prev_visit": d.days_since_prev_visit.to_numpy(),
+        "app_user": app.astype(bool),
+    })
+    ev = ev.sort_values("event_ts").reset_index(drop=True)
+    ev["event_ts"] = ev.event_ts.dt.floor("min")
+    ev["event_id"] = checkin_id(ev.member_id, ev.event_ts)
+    return ev.drop_duplicates("event_id").reset_index(drop=True)
 
 
 # ---------------------------------------------------------------------------
@@ -572,37 +625,42 @@ def build_gold(raw, scores, features):
         features, on="member_id").merge(nbo, on="member_id", how="left")
     profile["next_best_offer_channel"] = profile.next_best_offer_id.map(promo.default_channel)
 
-    featured = _featured_members(scores, profile)
+    featured_ev = featured_events(raw["instore_events"], scores, features, profile)
     return {
+        "featured_events": featured_ev,
         "promo_monthly": promo_monthly,
         "audience_tiers": tiers,
         "tier_backtest": backtest,
         "promo_portfolio": portfolio,
         "member_offer_scores": scores,
         "member_profile": profile,
-        "featured_members": featured,
     }
 
 
-def _featured_members(scores, profile):
-    """Pick real members from the scores that illustrate each kind of decision."""
-    s = scores.merge(profile[["member_id", "first_name", "last_name", "crm_segment", "visits"]], on="member_id")
+def featured_events(events, scores, features, profile):
+    """Real check-ins from the live day that show each kind of in-store decision, for the walkthrough."""
+    cand = offer_candidates(events, scores, features[["member_id", "marketing_opt_in"]])
+    dec = decide(cand).merge(profile[["member_id", "first_name", "last_name", "visits"]], on="member_id")
+    dec = dec[(dec.visits >= 8) & dec.app_user.astype(bool)]  # app users, so the walkthrough shows the push
+    live = cand[cand.eligible & cand.context_ok]
+    sure_pr01 = live[(live.promotion_id == "PR01") & (live.tier == "Sure Thing")].event_id
+    late = live[(live.promotion_id == "PR05")].event_id
     picks = [
-        ("Morning commuter, coffee only", "PR01", "Persuadable", "expected_net_margin"),
-        ("Morning commuter, already buys pastries", "PR01", "Sure Thing", "p_without_offer"),
-        ("Lapsing regular", "PR02", "Persuadable", "expected_net_margin"),
-        ("Afternoon snacker", "PR03", "Persuadable", "expected_net_margin"),
-        ("Late-night regular", "PR05", "Sure Thing", "p_without_offer"),
+        ("Coffee scanned, gets the croissant offer", (dec.promotion_id == "PR01") & (dec.decision == "Offer served")),
+        ("Coffee scanned, already buys pastries: no offer", dec.event_id.isin(sure_pr01) & (dec.decision == "No offer")),
+        ("Back after 3+ weeks: win-back offer", (dec.promotion_id == "PR02") & (dec.decision == "Offer served")),
+        ("Afternoon snacker: taquito offer", (dec.promotion_id == "PR03") & (dec.decision == "Offer served")),
+        ("Late-night regular: no offer pays back", dec.event_id.isin(late) & (dec.decision == "No offer")),
+        ("Held out for measurement", dec.decision == "Holdout (no offer shown)"),
     ]
     rows = []
-    for label, pid, tier, key in picks:
-        cand = s[(s.promotion_id == pid) & (s.tier == tier) & (s.visits >= 8)]
-        if cand.empty:
+    for label, mask in picks:
+        c = dec[mask].sort_values("event_ts")
+        if c.empty:
             continue
-        cand = cand.sort_values(key, ascending=False)
-        pick = cand.iloc[min(len(cand) - 1, len(cand) // 10)]
-        rows.append({"member_id": int(pick.member_id), "label": label,
-                     "display": f"{pick.first_name} {pick.last_name[0]}. — {label}"})
+        r = c.iloc[len(c) // 3]
+        rows.append({"event_id": int(r.event_id), "member_id": int(r.member_id), "label": label,
+                     "display": f"{r.event_ts:%H:%M} · store {r.store_id} · {r.first_name} {r.last_name[0]}. — {label}"})
     return pd.DataFrame(rows)
 
 
@@ -615,14 +673,20 @@ def feature_windows(pos_baskets, loyalty_members):
 def run_all(members=25_000, seed=711):
     """Full pipeline in pandas. Used by local_run.py; the notebooks run the same steps."""
     raw = simulate(members, seed)
+    raw["instore_events"] = instore_events(raw)
     train_f, score_f = feature_windows(raw["pos_baskets"], raw["loyalty_members"])
     models = train_uplift(raw["offer_history"], train_f)
     scores = score_members(models, score_f)
-    return raw, build_gold(raw, scores, score_f)
+    gold = build_gold(raw, scores, score_f)
+    gold["offer_decisions"] = decide(offer_candidates(raw["instore_events"], scores, score_f[["member_id", "marketing_opt_in"]]))
+    return raw, gold
 
 
 # Date columns in the raw tables, stored as DATE in Delta
 RAW_DATE_COLS = {"loyalty_members": ["enrolled_date"], "offer_history": ["sent_date"]}
+# Tables the streaming decision job reads and writes
+EVENT_COLS = ["event_id", "event_ts", "member_id", "store_id", "region", "city", "store_has_fresh_bakery",
+              "trigger", "daypart", "first_scan", "first_scan_label", "days_since_prev_visit", "app_user"]
 SAVE_CHUNK_ROWS = 500_000
 
 

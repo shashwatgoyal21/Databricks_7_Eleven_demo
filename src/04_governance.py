@@ -1,15 +1,15 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 04 · Metric view, access rules, and the approvals table
+# MAGIC # 04 · Metric view, access rules, and the decision log
 # MAGIC
 # MAGIC - `metrics_promotions`: the Unity Catalog metric view the dashboard and Genie both read.
-# MAGIC - Row filter: regional marketing managers see only their region. `loyalty_leadership` sees everything.
-# MAGIC - Column mask: member names and emails are visible only to `loyalty_pii`.
-# MAGIC - `campaign_approvals`: written by the app when someone approves a campaign. Kept across reruns.
+# MAGIC - Row filter: regional data teams see only their region's rows. `nbo_platform` sees everything.
+# MAGIC - Column mask: shopper names and emails are visible only to `nbo_pii_readers`.
+# MAGIC - `live_decision_log`: written by the app for every decision it makes. Kept across reruns.
 # MAGIC
-# MAGIC Account groups used: `loyalty_leadership`, `marketing_texas`, `marketing_california`,
-# MAGIC `marketing_florida`, `marketing_northeast`, `loyalty_pii`. Add yourself and the app's service
-# MAGIC principal to `loyalty_leadership`, or you will see no rows.
+# MAGIC Account groups used: `nbo_platform`, `nbo_region_texas`, `nbo_region_california`,
+# MAGIC `nbo_region_florida`, `nbo_region_northeast`, `nbo_pii_readers`. Add yourself and the app's
+# MAGIC service principal to `nbo_platform`, or you will see no rows.
 
 # COMMAND ----------
 
@@ -25,8 +25,8 @@ import sys
 sys.path.insert(0, os.getcwd())
 import nbo_lib  # noqa: E402
 
-REGION_GROUPS = {r: f"marketing_{r.lower()}" for r in nbo_lib.REGIONS}
-GROUPS = ["loyalty_leadership", *REGION_GROUPS.values(), "loyalty_pii"]
+REGION_GROUPS = {r: f"nbo_region_{r.lower()}" for r in nbo_lib.REGIONS}
+GROUPS = ["nbo_platform", *REGION_GROUPS.values(), "nbo_pii_readers"]
 
 # COMMAND ----------
 
@@ -51,9 +51,9 @@ dimensions:
   - name: send_policy
     expr: send_policy
 measures:
-  - name: offers_sent
+  - name: offers_served
     expr: SUM(sends)
-  - name: holdout_members
+  - name: holdout_shoppers
     expr: SUM(holdout)
   - name: redemptions
     expr: SUM(redemptions)
@@ -80,49 +80,42 @@ $$
 
 # COMMAND ----------
 
-# Groups may be account groups or workspace-local groups (a trial workspace often has only the
-# latter), so each check accepts either.
-def in_group(g):
-    return f"(is_account_group_member('{g}') OR is_member('{g}'))"
-
-
-region_clauses = "\n    ".join(f"OR (region = '{r}' AND {in_group(g)})" for r, g in REGION_GROUPS.items())
+region_clauses = "\n    ".join(f"OR (region = '{r}' AND is_account_group_member('{g}'))"
+                               for r, g in REGION_GROUPS.items())
 spark.sql(f"""
-CREATE OR REPLACE FUNCTION {fq}.loyalty_region_filter(region STRING)
-RETURN {in_group('loyalty_leadership')}
+CREATE OR REPLACE FUNCTION {fq}.nbo_region_filter(region STRING)
+RETURN is_account_group_member('nbo_platform')
     {region_clauses}
 """)
 
 spark.sql(f"""
-CREATE OR REPLACE FUNCTION {fq}.loyalty_pii_mask(value STRING)
-RETURN CASE WHEN {in_group('loyalty_pii')} THEN value ELSE '***' END
+CREATE OR REPLACE FUNCTION {fq}.nbo_pii_mask(value STRING)
+RETURN CASE WHEN is_account_group_member('nbo_pii_readers') THEN value ELSE '***' END
 """)
 
 for table in ["loyalty_members", "member_features", "member_profile", "member_offer_scores", "offer_history",
-              "promo_monthly"]:
-    spark.sql(f"ALTER TABLE {fq}.{table} SET ROW FILTER {fq}.loyalty_region_filter ON (region)")
+              "promo_monthly", "instore_events", "offer_decisions"]:
+    spark.sql(f"ALTER TABLE {fq}.{table} SET ROW FILTER {fq}.nbo_region_filter ON (region)")
 
 for table in ["loyalty_members", "member_profile"]:
     for col in ["first_name", "last_name", "email"]:
-        spark.sql(f"ALTER TABLE {fq}.{table} ALTER COLUMN {col} SET MASK {fq}.loyalty_pii_mask")
+        spark.sql(f"ALTER TABLE {fq}.{table} ALTER COLUMN {col} SET MASK {fq}.nbo_pii_mask")
 
 # COMMAND ----------
 
 spark.sql(f"""
-CREATE TABLE IF NOT EXISTS {fq}.campaign_approvals (
+CREATE TABLE IF NOT EXISTS {fq}.live_decision_log (
+  event_id BIGINT,
+  store_id BIGINT,
+  member_id BIGINT,
+  decision STRING,
   promotion_id STRING,
-  promotion_name STRING,
-  strategy STRING,
-  audience_size BIGINT,
-  expected_redemptions DOUBLE,
-  expected_discount_cost DOUBLE,
-  expected_net_margin DOUBLE,
   channel STRING,
-  approved_by STRING,
-  approved_at TIMESTAMP,
-  status STRING
+  latency_ms DOUBLE,
+  logged_by STRING,
+  logged_at TIMESTAMP
 )
-COMMENT 'Campaigns approved in the NBO app. An activation job would pick these up.'
+COMMENT 'Every real-time offer decision made from the NBO app: one row per in-store check-in.'
 """)
 
 # COMMAND ----------
@@ -136,4 +129,4 @@ for group in GROUPS:
 
 print("Groups also need USE CATALOG on the catalog. Grant it separately if they don't have it.")
 print("The app's service principal needs: USE CATALOG, USE SCHEMA, SELECT on the schema, MODIFY on "
-      "campaign_approvals, and membership in loyalty_leadership. See README step 3.")
+      "live_decision_log, and membership in nbo_platform. See README, Finish in the UI.")

@@ -9,11 +9,14 @@ variables:
     description: Schema for the demo tables (keep in sync with NBO_SCHEMA in app/app.yaml)
     default: nbo_demo
   members:
-    description: Number of synthetic loyalty members to simulate
+    description: Number of synthetic loyalty shoppers to simulate
     default: "25000"
   warehouse_id:
     description: Pro or Serverless SQL warehouse the app queries
     default: bb3aef1c44eb3c3a
+  endpoint_name:
+    description: Model Serving endpoint that makes the real-time decision
+    default: nbo-decision
 
 resources:
   jobs:
@@ -43,9 +46,26 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
               schema: ${var.schema}
-        - task_key: governance
+        - task_key: stream_decisions
           depends_on:
             - task_key: validate_story
+          notebook_task:
+            notebook_path: ./src/05_stream_decisions.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+        - task_key: serve_decisions
+          depends_on:
+            - task_key: stream_decisions
+          notebook_task:
+            notebook_path: ./src/06_serve_decisions.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              endpoint_name: ${var.endpoint_name}
+        - task_key: governance
+          depends_on:
+            - task_key: serve_decisions
           notebook_task:
             notebook_path: ./src/04_governance.py
             base_parameters:
@@ -55,7 +75,7 @@ resources:
   apps:
     nbo_app:
       name: nbo-decision-engine
-      description: Next Best Offer decision engine on synthetic loyalty data
+      description: Real-time in-store Next Best Offer decisioning on synthetic data
       source_code_path: ./app
       resources:
         - name: sql-warehouse

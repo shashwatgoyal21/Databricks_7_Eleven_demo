@@ -122,8 +122,12 @@ spark.sql(f"""CREATE TABLE IF NOT EXISTS {fq}.agent_activity (
 
 # COMMAND ----------
 
-sys.path.insert(0, os.path.join(os.getcwd(), "..", "app"))
-from finance import DEFAULTS  # noqa: E402
+import ast  # noqa: E402
+
+# Read DEFAULTS from app/finance.py without importing it (that module needs Streamlit, not on job compute)
+_src = open(os.path.join(os.getcwd(), "..", "app", "finance.py")).read()
+DEFAULTS = next(ast.literal_eval(n.value) for n in ast.parse(_src).body
+                if isinstance(n, ast.Assign) and any(getattr(t, "id", "") == "DEFAULTS" for t in n.targets))
 
 spark.sql(f"""CREATE TABLE IF NOT EXISTS {fq}.finance_assumptions (
   key STRING, value DOUBLE, unit STRING, description STRING, updated_by STRING, updated_at TIMESTAMP)

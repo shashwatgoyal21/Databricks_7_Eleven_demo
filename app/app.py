@@ -171,7 +171,7 @@ def render_agent_tab():
             c1.markdown(f"**{i}. {r['title']}**  \n:{color}[{r['kind']}] · {r['why']}")
             c2.metric("Margin a month", agent.money(r["impact"], True), label_visibility="visible")
             if c3.button("Ask the agent", key=f"ask_rec_{i}", width="stretch"):
-                agent_chat(r["ask"])
+                st.session_state["_open_chat"] = r["ask"]
 
     agent.record_proposals(b["recs"])
     st.caption("Promotion-level results only. Each recommendation is stored in `agent_proposals` for approval.")
@@ -220,9 +220,17 @@ def agent_chat(question=None):
             with st.chat_message("assistant"):
                 with st.spinner("Thinking..."):
                     reply = agent.ask([{"role": x["role"], "content": x["content"]} for x in ss.chat])
+                # Draw the reply in place: a fragment rerun is not allowed when the dialog was just opened
+                if reply.get("routed"):
+                    st.caption(f"Answered by: {reply['routed']}")
+                st.markdown(reply["content"])
+                for t in reply.get("tables", []) or []:
+                    st.dataframe(t, hide_index=True, width="stretch")
+                for sql in reply.get("sql", []) or []:
+                    with st.expander("SQL it ran"):
+                        st.code(sql, language="sql")
         ss.chat.append(reply)
         agent.record_activity("question", q, reply.get("routed", ""))
-        st.rerun(scope="fragment")
     if ss.chat and st.button("Clear conversation", type="tertiary"):
         ss.chat = []
         st.rerun(scope="fragment")
@@ -371,4 +379,7 @@ with tab1:
 # ==========================================
 with st.container(key="agent_fab"):
     if st.button("Ask the agent", icon=":material/forum:", type="primary"):
-        agent_chat()
+        st.session_state["_open_chat"] = ""
+# One dialog per run, whichever button opened it
+if "_open_chat" in st.session_state:
+    agent_chat(st.session_state.pop("_open_chat") or None)

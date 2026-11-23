@@ -101,6 +101,23 @@ The job runs them in the order above. Rerunning rebuilds everything except `live
 
 For production, point check-ins at Zerobus (or Kafka) so they land in `instore_events` continuously, and drop the `availableNow` trigger in step 5.
 
+## Tests before you deploy
+
+```
+pip install -r requirements-dev.txt
+pytest
+```
+
+The tests build the demo data in pandas (about 10 seconds) and check, without a workspace:
+
+- every SQL statement the app sends uses only tables and columns the build job creates;
+- the decision model returns the documented response columns and logs with an input and output signature, as Unity Catalog requires;
+- every Databricks SDK call in the notebooks and app matches the SDK (required arguments, method names);
+- the bundle, the job's notebook parameters and the app config agree;
+- the whole app renders with no errors and no emojis.
+
+They run on every pull request (`.github/workflows/tests.yml`). After a deploy, `tests/test_live_workspace.py` also compiles the app's SQL against the live tables and sends one check-in to the endpoint when `DATABRICKS_HOST`, `DATABRICKS_TOKEN` and `NBO_WAREHOUSE_ID` are set.
+
 ## Finish in the UI
 
 1. **App access.** Notebook 06 grants the app `CAN_QUERY` on the endpoint. Also add the app's service principal to `nbo_platform`, then:

@@ -7,7 +7,7 @@
 # MAGIC - Column mask: shopper names and emails are visible only to `nbo_pii_readers`.
 # MAGIC - `live_decision_log`: written by the app for every decision it makes. Kept across reruns.
 # MAGIC
-# MAGIC Account groups used: `nbo_platform`, `nbo_region_texas`, `nbo_region_california`,
+# MAGIC Groups used (account or workspace groups): `nbo_platform`, `nbo_region_texas`, `nbo_region_california`,
 # MAGIC `nbo_region_florida`, `nbo_region_northeast`, `nbo_pii_readers`. Add yourself and the app's
 # MAGIC service principal to `nbo_platform`, or you will see no rows.
 
@@ -15,6 +15,10 @@
 
 dbutils.widgets.text("catalog", "workspace")
 dbutils.widgets.text("schema", "nbo_demo")
+# "true": every workspace user (and the app) sees all rows; names stay masked. The data is synthetic.
+# "false": only nbo_platform sees all rows; regional groups see their region; names need nbo_pii_readers.
+dbutils.widgets.text("open_to_all", "true")
+open_to_all = dbutils.widgets.get("open_to_all").lower() == "true"
 catalog = dbutils.widgets.get("catalog")
 schema = dbutils.widgets.get("schema")
 fq = f"{catalog}.{schema}"
@@ -80,17 +84,26 @@ $$
 
 # COMMAND ----------
 
-region_clauses = "\n    ".join(f"OR (region = '{r}' AND is_account_group_member('{g}'))"
-                               for r, g in REGION_GROUPS.items())
+def in_group(g):
+    """Account group or workspace-local group, so the demo works in workspaces without account groups."""
+    return f"(is_account_group_member('{g}') OR is_member('{g}'))"
+
+
+# Row filter stays on. Everyone in the account passes it when open_to_all, otherwise nbo_platform only
+ALL_ROWS = "is_account_group_member('account users')" if open_to_all else in_group("nbo_platform")
+# Names and emails stay masked unless you are in nbo_pii_readers, either way
+ALL_NAMES = in_group("nbo_pii_readers")
+
+region_clauses = "\n    ".join(f"OR (region = '{r}' AND {in_group(g)})" for r, g in REGION_GROUPS.items())
 spark.sql(f"""
 CREATE OR REPLACE FUNCTION {fq}.nbo_region_filter(region STRING)
-RETURN is_account_group_member('nbo_platform')
+RETURN {ALL_ROWS}
     {region_clauses}
 """)
 
 spark.sql(f"""
 CREATE OR REPLACE FUNCTION {fq}.nbo_pii_mask(value STRING)
-RETURN CASE WHEN is_account_group_member('nbo_pii_readers') THEN value ELSE '***' END
+RETURN CASE WHEN {ALL_NAMES} THEN value ELSE '***' END
 """)
 
 for table in ["loyalty_members", "member_features", "member_profile", "member_offer_scores", "offer_history",
@@ -119,6 +132,11 @@ COMMENT 'Every real-time offer decision made from the NBO app: one row per in-st
 """)
 
 # COMMAND ----------
+
+if open_to_all:
+    spark.sql(f"GRANT USE SCHEMA, SELECT, EXECUTE ON SCHEMA {fq} TO `account users`")
+    spark.sql(f"GRANT MODIFY ON TABLE {fq}.live_decision_log TO `account users`")
+    print("Everyone in the account can read the demo schema; the app can write live_decision_log")
 
 for group in GROUPS:
     try:

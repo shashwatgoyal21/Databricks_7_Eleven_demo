@@ -15,44 +15,85 @@ st.markdown("""
   [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] { display: none; }
   header[data-testid="stHeader"] { background: transparent; }
   .block-container { padding-top: 1.4rem !important; padding-bottom: 6rem !important; max-width: 1360px; }
-  .eyebrow { font-size: 12px; letter-spacing: .14em; font-weight: 700; color: #FF5F46; text-transform: uppercase; }
-  .ptitle { font-size: 30px; font-weight: 700; color: #F9F7F4; line-height: 1.15; }
-  .bell { display:inline-flex; align-items:center; gap:8px; font-size:13px; color:#C9D2D5; justify-content:flex-end; width:100% }
+  .eyebrow { font-size: 12px; letter-spacing: .14em; font-weight: 700; color: var(--accent-text); text-transform: uppercase; }
+  .ptitle { font-size: 30px; font-weight: 700; color: var(--text); line-height: 1.15; }
+  .bell { display:inline-flex; align-items:center; gap:8px; font-size:13px; color:var(--text2); justify-content:flex-end; width:100% }
   .bell b { background:#FF3621; color:#fff; border-radius:999px; padding:1px 8px; font-size:12px; }
-  .kpi { background:#11262D; border:1px solid #1F3A43; border-radius:12px; padding:16px 18px; }
-  .kpi .l { font-size:12.5px; color:#9AA9AE; }
-  .kpi .v { font-size:30px; font-weight:700; color:#F9F7F4; line-height:1.15; margin-top:6px; }
+  .kpi { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px 18px; }
+  .kpi .l { font-size:12.5px; color:var(--muted); }
+  .kpi .v { font-size:30px; font-weight:700; color:var(--text); line-height:1.15; margin-top:6px; }
   .kpi .s { margin-top:8px; }
-  .sec { font-size:13px; font-weight:600; color:#C9D2D5; margin:26px 0 10px; }
-  .sc { background:#11262D; border:1px solid #1F3A43; border-radius:12px; overflow:hidden; margin-bottom:6px; }
+  .sec { font-size:13px; font-weight:600; color:var(--text2); margin:26px 0 10px; }
+  .sc { background:var(--card); border:1px solid var(--border); border-radius:12px; overflow:hidden; margin-bottom:6px; }
   .sc .bar { height:5px; }
   .sc .in { padding:16px 18px 6px; }
-  .sc h4 { font-size:17px; font-weight:700; color:#F9F7F4; margin:0 0 4px; padding:0; }
-  .sc .d { font-size:13px; color:#9AA9AE; min-height:38px; }
-  .strip { display:grid; grid-template-columns:repeat(3,1fr); background:#0B2026; border:1px solid #1F3A43;
+  .sc h4 { font-size:17px; font-weight:700; color:var(--text); margin:0 0 4px; padding:0; }
+  .sc .d { font-size:13px; color:var(--muted); min-height:38px; }
+  .strip { display:grid; grid-template-columns:repeat(3,1fr); background:var(--strip); border:1px solid var(--border);
            border-radius:10px; margin:12px 0; }
-  .strip div { text-align:center; padding:10px 4px; border-right:1px solid #1F3A43; }
+  .strip div { text-align:center; padding:10px 4px; border-right:1px solid var(--border); }
   .strip div:last-child { border-right:none; }
-  .strip span { display:block; font-size:11.5px; color:#9AA9AE; }
-  .strip b { font-size:19px; color:#F9F7F4; }
-  .strip b.g { color:#00A972; } .strip b.r { color:#FF5F46; }
-  .tags { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; font-size:11.5px; color:#9AA9AE; }
-  .tags .lb { display:block; border-bottom:1px solid #1F3A43; padding-bottom:6px; margin-bottom:8px; }
+  .strip span { display:block; font-size:11.5px; color:var(--muted); }
+  .strip b { font-size:19px; color:var(--text); }
+  .strip b.g { color:var(--good-num); } .strip b.r { color:var(--bad-num); }
+  .tags { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; font-size:11.5px; color:var(--muted); }
+  .tags .lb { display:block; border-bottom:1px solid var(--border); padding-bottom:6px; margin-bottom:8px; }
   .pill { display:inline-block; font-size:12px; font-weight:600; padding:3px 10px; border-radius:999px;
-          background:#1B3139; color:#C9D2D5; }
-  .pill.good { background:rgba(0,169,114,.16); color:#2FD39A; }
-  .pill.warn { background:rgba(254,171,3,.16); color:#FEC44D; }
-  .pill.bad { background:rgba(255,54,33,.16); color:#FF7A66; }
-  .ai { font-size:12.5px; color:#9AA9AE; border-top:1px solid #1F3A43; padding:10px 0 4px; margin-top:12px; }
-  .ai b { color:#C9D2D5; }
+          background:var(--pill); color:var(--text2); }
+  .pill.good { background:rgba(0,169,114,.16); color:var(--good); }
+  .pill.warn { background:rgba(254,171,3,.16); color:var(--warn); }
+  .pill.bad { background:rgba(255,54,33,.16); color:var(--bad); }
+  .ai { font-size:12.5px; color:var(--muted); border-top:1px solid var(--border); padding:10px 0 4px; margin-top:12px; }
+  .ai b { color:var(--text2); }
   .st-key-agent_fab { position: fixed; right: 28px; bottom: 24px; z-index: 999; width: auto !important; }
-  .st-key-agent_fab button { border-radius: 999px; padding: 0.6rem 1.2rem; background:#1B3139; border:1px solid #1F3A43;
+  .st-key-agent_fab button { border-radius: 999px; padding: 0.6rem 1.2rem; background:var(--pill); border:1px solid var(--border);
                              box-shadow: 0 6px 18px rgba(0,0,0,.35); }
 </style>
 """, unsafe_allow_html=True)
 
 def hurdle_now():
     return finance.assumptions()["hurdle_rate"]
+
+
+LIGHT = {"bg": "#F9F7F4", "card": "#FFFFFF", "border": "#DBD7CE", "strip": "#F9F7F4", "pill": "#EEEDE9",
+         "text": "#0B2026", "text2": "#1B3139", "muted": "#5F6F75", "accent-text": "#E02E1A",
+         "good": "#007A53", "warn": "#8A5A00", "bad": "#C42A16", "good-num": "#008A5E", "bad-num": "#E02E1A"}
+DARK = {"bg": "#0A0A0A", "card": "#141414", "border": "#262626", "strip": "#0F0F0F", "pill": "#1F1F1F",
+        "text": "#F5F5F5", "text2": "#D4D4D4", "muted": "#A1A1A1", "accent-text": "#FF5F46",
+        "good": "#2FD39A", "warn": "#FEC44D", "bad": "#FF7A66", "good-num": "#2FD39A", "bad-num": "#FF5F46"}
+
+
+def apply_mode(dark):
+    """Light by default; dark is neutral black (no tint). Lava stays the only accent in both."""
+    v = DARK if dark else LIGHT
+    css = ":root{" + "".join(f"--{k}:{c};" for k, c in v.items()) + "}"
+    if dark:
+        css += """
+  .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] { background: var(--bg) !important; }
+  .stApp, .stApp p, .stApp li, .stApp label, .stApp span, [data-testid="stMarkdownContainer"] { color: var(--text); }
+  [data-testid="stVerticalBlockBorderWrapper"], [data-testid="stExpander"] details {
+      background: var(--card) !important; border-color: var(--border) !important; }
+  .stButton button:not([kind="primary"]), .stDownloadButton button, .stLinkButton a {
+      background: var(--card) !important; color: var(--text) !important; border-color: var(--border) !important; }
+  .stVerticalBlock, [data-testid="stLayoutWrapper"] > div { border-color: var(--border) !important; }
+  [data-baseweb="tab"] p { color: var(--muted) !important; }
+  [data-baseweb="tab"][aria-selected="true"] p { color: var(--text) !important; }
+  [data-baseweb="tab-border"] { background: var(--border) !important; }
+  div[role="dialog"] { background: var(--card) !important; color: var(--text) !important; }
+  [data-testid="stChatMessage"] { background: var(--strip) !important; }
+  input, textarea { background: var(--strip) !important; color: var(--text) !important; }
+  .st-key-agent_fab button { background: var(--card) !important; color: var(--text) !important; }
+  [data-testid="stToolbar"] * { color: var(--muted) !important; }"""
+    else:
+        css += ".st-key-agent_fab button { background:#1B3139 !important; color:#FFFFFF !important; border-color:#1B3139 !important; }"
+    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
+
+
+def chart_style(c):
+    """Axis and legend colors that read in the current mode."""
+    v = DARK if st.session_state.get("dark") else LIGHT
+    return c.configure_axis(labelColor=v["muted"], domainColor=v["border"], tickColor=v["border"]) \
+            .configure_legend(labelColor=v["text2"]).configure_view(stroke=None)
 
 
 KIND_COLOR = {"Scale": "#00A972", "Retarget": "#FEAB03", "Stop or switch": "#FF3621"}
@@ -91,7 +132,8 @@ def render_overview():
     progs = t.set_index("promotion_id") if not t.empty else None
     pending = sum(agent.proposal_status(r) == "proposed" for r in b["recs"][:3])
 
-    h1, h2, h3, h4 = st.columns([3.6, 1, 1.1, 1.1], vertical_alignment="center")
+    h1, h0, h2, h3, h4 = st.columns([3.0, 0.9, 0.9, 1.1, 1.1], vertical_alignment="center")
+    h0.toggle("Dark mode", key="dark")
     h1.markdown('<div class="eyebrow">7-Eleven Offer Engine</div><div class="ptitle">Overview</div>',
                 unsafe_allow_html=True)
     h2.markdown(f'<div class="bell">Approvals <b>{pending}</b></div>', unsafe_allow_html=True)
@@ -132,7 +174,7 @@ def render_overview():
                                 range=["#00A972", "#FF3621"]), legend=alt.Legend(orient="bottom", title=None)),
                 tooltip=["program", alt.Tooltip("roic:Q", format=".1%"), "status"])
             rule = alt.Chart(pd.DataFrame({"h": [hurdle_now()]})).mark_rule(color="#FEAB03", strokeDash=[4, 3]).encode(x="h:Q")
-            st.altair_chart((bars + rule).properties(height=220, background="transparent"), width="stretch")
+            st.altair_chart(chart_style((bars + rule).properties(height=220, background="transparent")), width="stretch")
         with c2.container(border=True):
             st.markdown('<div class="sec" style="margin-top:0">Acceptance vs holdout by daypart</div>',
                         unsafe_allow_html=True)
@@ -150,7 +192,7 @@ def render_overview():
                 color=alt.Color("group:N", scale=alt.Scale(range=["#618693", "#FF3621"]),
                                 legend=alt.Legend(orient="bottom", title=None)),
                 tooltip=["daypart", "group", alt.Tooltip("rate:Q", format=".1%")])
-            st.altair_chart(ch.properties(height=220, background="transparent"), width="stretch")
+            st.altair_chart(chart_style(ch.properties(height=220, background="transparent")), width="stretch")
 
     st.markdown('<div class="sec">Actions for approval</div>', unsafe_allow_html=True)
     agent.record_proposals(b["recs"])
@@ -260,6 +302,8 @@ def agent_chat(question=None):
         st.rerun(scope="fragment")
 
 
+
+apply_mode(st.session_state.get("dark", False))
 
 tab_overview, tab_reporting = st.tabs(["Overview", "Reporting"])
 with tab_overview:

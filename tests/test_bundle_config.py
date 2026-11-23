@@ -53,3 +53,15 @@ def test_app_requirements_cover_its_imports():
     reqs = (ROOT / "app" / "requirements.txt").read_text().lower()
     for pkg in ["streamlit", "databricks-sql-connector", "databricks-sdk", "pandas"]:
         assert pkg in reqs
+
+
+def test_job_notebooks_do_not_import_streamlit_modules():
+    """Job compute has no Streamlit; a notebook must not import an app module that needs it."""
+    import ast
+    needs_st = {p.stem for p in (ROOT / "app").glob("*.py") if re.search(r"^import streamlit", p.read_text(), re.M)}
+    for nb in (ROOT / "src").glob("*.py"):
+        for node in ast.walk(ast.parse(nb.read_text())):
+            mods = ([a.name for a in node.names] if isinstance(node, ast.Import)
+                    else [node.module] if isinstance(node, ast.ImportFrom) else [])
+            bad = {m.split(".")[0] for m in mods if m} & needs_st
+            assert not bad, f"{nb.name}:{node.lineno} imports {bad}, which needs Streamlit"

@@ -1,183 +1,252 @@
 import html
-import os
-import time
 
 import altair as alt
-import numpy as np
 import pandas as pd
 import streamlit as st
 
 import agent
 import data
-import nbo_decision as nd
-import push
+import finance
 
-BRAND = os.getenv("NBO_BRAND", "7-Eleven")
-st.set_page_config(page_title=f"{BRAND} · Real-Time Next Best Offer", layout="wide")
+st.set_page_config(page_title="Offer Engine", layout="wide", initial_sidebar_state="collapsed")
 
 st.markdown("""
-    <style>
-        html, body, [class*="css"] { font-size: 13.5px !important; }
-        h1 { font-size: 1.65rem !important; padding-bottom: 0.25rem !important; }
-        h2 { font-size: 1.30rem !important; padding-top: 0.25rem !important; }
-        h3 { font-size: 1.08rem !important; }
-        [data-testid="stMetricValue"] { font-size: 1.35rem !important; }
-        [data-testid="stMetricLabel"] { font-size: 0.85rem !important; }
-        .block-container { padding-top: 1.5rem !important; padding-bottom: 5rem !important; }
-        .phone { border: 2px solid #1B3139; border-radius: 22px; padding: 14px 14px 18px; max-width: 300px;
-                 background: #FFFFFF; }
-        .phone .bar { font-size: 11px; color: #4A5E68; display: flex; justify-content: space-between; }
-        .phone .push { margin-top: 10px; background: #fff; border-radius: 12px; padding: 10px 12px;
-                       box-shadow: 0 1px 4px rgba(0,0,0,.15); }
-        .phone .push .app { font-size: 11px; color: #1B3139; font-weight: 600; }
-        .phone .push .msg { font-size: 14px; font-weight: 600; margin-top: 2px; }
-        .pinpad { border: 2px solid #0B2026; border-radius: 8px; background: #1B3139; color: #F9F7F4; padding: 12px;
-                  max-width: 300px; margin-top: 10px; font-family: monospace; font-size: 12.5px; }
-        .pinpad .hl { color: #00A972; }
-        .muted { color: #4A5E68; }
-        .phone .loc { font-size: 11.5px; margin-top: 8px; color: #1B5162; }
-        .st-key-agent_fab { position: fixed; right: 28px; bottom: 24px; z-index: 999; width: auto !important; }
-        .st-key-agent_fab button { border-radius: 999px; padding: 0.55rem 1.1rem; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
-    </style>
+<style>
+  [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] { display: none; }
+  header[data-testid="stHeader"] { background: transparent; }
+  .block-container { padding-top: 1.4rem !important; padding-bottom: 6rem !important; max-width: 1360px; }
+  .eyebrow { font-size: 12px; letter-spacing: .14em; font-weight: 700; color: var(--accent-text); text-transform: uppercase; }
+  .ptitle { font-size: 30px; font-weight: 700; color: var(--text); line-height: 1.15; }
+  .bell { display:inline-flex; align-items:center; gap:8px; font-size:13px; color:var(--text2); justify-content:flex-end; width:100% }
+  .bell b { background:#FF3621; color:#fff; border-radius:999px; padding:1px 8px; font-size:12px; }
+  .kpi { background:var(--card); border:1px solid var(--border); border-radius:12px; padding:16px 18px; }
+  .kpi .l { font-size:12.5px; color:var(--muted); }
+  .kpi .v { font-size:30px; font-weight:700; color:var(--text); line-height:1.15; margin-top:6px; }
+  .kpi .s { margin-top:8px; }
+  .sec { font-size:13px; font-weight:600; color:var(--text2); margin:26px 0 10px; }
+  .sc { background:var(--card); border:1px solid var(--border); border-radius:12px; overflow:hidden; margin-bottom:6px; }
+  .sc .bar { height:5px; }
+  .sc .in { padding:16px 18px 6px; }
+  .sc h4 { font-size:17px; font-weight:700; color:var(--text); margin:0 0 4px; padding:0; }
+  .sc .d { font-size:13px; color:var(--muted); min-height:38px; }
+  .strip { display:grid; grid-template-columns:repeat(3,1fr); background:var(--strip); border:1px solid var(--border);
+           border-radius:10px; margin:12px 0; }
+  .strip div { text-align:center; padding:10px 4px; border-right:1px solid var(--border); }
+  .strip div:last-child { border-right:none; }
+  .strip span { display:block; font-size:11.5px; color:var(--muted); }
+  .strip b { font-size:19px; color:var(--text); }
+  .strip b.g { color:var(--good-num); } .strip b.r { color:var(--bad-num); }
+  .tags { display:grid; grid-template-columns:repeat(3,1fr); gap:10px; font-size:11.5px; color:var(--muted); }
+  .tags .lb { display:block; border-bottom:1px solid var(--border); padding-bottom:6px; margin-bottom:8px; }
+  .pill { display:inline-block; font-size:12px; font-weight:600; padding:3px 10px; border-radius:999px;
+          background:var(--pill); color:var(--text2); }
+  .pill.good { background:rgba(0,169,114,.16); color:var(--good); }
+  .pill.warn { background:rgba(254,171,3,.16); color:var(--warn); }
+  .pill.bad { background:rgba(255,54,33,.16); color:var(--bad); }
+  .ai { font-size:12.5px; color:var(--muted); border-top:1px solid var(--border); padding:10px 0 4px; margin-top:12px; }
+  .ai b { color:var(--text2); }
+  .st-key-agent_fab { position: fixed; right: 28px; bottom: 24px; z-index: 999; width: auto !important; }
+  .st-key-agent_fab button { border-radius: 999px; padding: 0.6rem 1.2rem; background:var(--pill); border:1px solid var(--border);
+                             box-shadow: 0 6px 18px rgba(0,0,0,.35); }
+</style>
 """, unsafe_allow_html=True)
 
-PROMOS = data.table("promotions").set_index("promotion_id")
-BACKTEST_TIERS = ["Persuadable", "Low ROI", "Sure Thing", "Lost Cause"]
+def hurdle_now():
+    return finance.assumptions()["hurdle_rate"]
 
 
-def money(x, signed=False):
-    sign = "+" if signed and x > 0 else ("-" if x < 0 else "")
-    return f"{sign}${abs(x):,.0f}"
+LIGHT = {"bg": "#F9F7F4", "card": "#FFFFFF", "border": "#DBD7CE", "strip": "#F9F7F4", "pill": "#EEEDE9",
+         "text": "#0B2026", "text2": "#1B3139", "muted": "#5F6F75", "accent-text": "#E02E1A",
+         "good": "#007A53", "warn": "#8A5A00", "bad": "#C42A16", "good-num": "#008A5E", "bad-num": "#E02E1A"}
+DARK = {"bg": "#0A0A0A", "card": "#141414", "border": "#262626", "strip": "#0F0F0F", "pill": "#1F1F1F",
+        "text": "#F5F5F5", "text2": "#D4D4D4", "muted": "#A1A1A1", "accent-text": "#FF5F46",
+        "good": "#2FD39A", "warn": "#FEC44D", "bad": "#FF7A66", "good-num": "#2FD39A", "bad-num": "#FF5F46"}
 
 
-def pct(x, signed=False):
-    return f"{x:+.0%}" if signed else f"{x:.0%}"
-
-
-def shopper_name(prof):
-    if prof is None or not isinstance(prof.first_name, str) or prof.first_name == "***":
-        return "*** (PII masked)"
-    return f"{prof.first_name} {prof.last_name[:1]}."
-
-
-def run_decision(ev_row, scores, profiles):
-    """The real-time decision path for one check-in. Returns (decision row, candidates, latency ms)."""
-    t0 = time.perf_counter()
-    ev = ev_row.to_frame().T.infer_objects()
-    cand = nd.offer_candidates(ev, scores, profiles[["member_id", "marketing_opt_in"]])
-    dec = nd.decide(cand).iloc[0] if len(cand) else None
-    return dec, cand, (time.perf_counter() - t0) * 1000
-
-
-def serve_decision(ev_row, scores, profiles):
-    """Ask the real-time decision service; fall back to the in-app path if it is unavailable.
-    Returns (decision Series, round-trip ms, served_by, request, response)."""
-    req, resp, ms = data.call_decision_service(ev_row)
-    if resp is not None:
-        dec = pd.Series(resp)
-        dec["app_user"] = bool(ev_row.app_user)
-        dec["holdout"] = bool(dec.get("holdout", False))
-        dec["promotion_id"] = dec.get("promotion_id") or None
-        dec["offer_message"] = dec.get("offer_message") or None
-        dec["channel"] = dec.get("channel") or None
-        return dec, ms, data.endpoint_label(), req, resp
-    dec, _, ms = run_decision(ev_row, scores, profiles)
-    return dec, ms, "in-app fallback", req, None
-
-
-def offer_card(dec, prof, ts):
-    """Phone push and pin-pad screen for a decision."""
-    loc = (f'<div class="loc">Location shared · entered the store at {ts:%H:%M}</div>' if dec is not None and dec.app_user
-           else '<div class="loc muted">No app location: loyalty ID scanned at the pin-pad</div>')
-    if dec is not None and dec.decision == "Offer served":
-        msg = html.escape(dec.offer_message)
-        phone = (f'<div class="push"><div class="app">7-ELEVEN · now</div>'
-                 f'<div class="msg">{msg}</div><div class="muted">Tap to add to your order</div></div>'
-                 if dec.app_user else '<div class="push muted">Not an app user: pin-pad only</div>')
-        pin = f'<div class="pinpad">WELCOME BACK!<br><span class="hl">{msg.upper()}</span><br>[ ADD ]  [ NO THANKS ]</div>'
+def apply_mode(dark):
+    """Light by default; dark is neutral black (no tint). Lava stays the only accent in both."""
+    v = DARK if dark else LIGHT
+    css = ":root{" + "".join(f"--{k}:{c};" for k, c in v.items()) + "}"
+    if dark:
+        css += """
+  .stApp, [data-testid="stAppViewContainer"], [data-testid="stMain"] { background: var(--bg) !important; }
+  .stApp, .stApp p, .stApp li, .stApp label, .stApp span, [data-testid="stMarkdownContainer"] { color: var(--text); }
+  [data-testid="stVerticalBlockBorderWrapper"], [data-testid="stExpander"] details {
+      background: var(--card) !important; border-color: var(--border) !important; }
+  .stButton button:not([kind="primary"]), .stDownloadButton button, .stLinkButton a {
+      background: var(--card) !important; color: var(--text) !important; border-color: var(--border) !important; }
+  .stVerticalBlock, [data-testid="stLayoutWrapper"] > div { border-color: var(--border) !important; }
+  [data-baseweb="tab"] p { color: var(--muted) !important; }
+  [data-baseweb="tab"][aria-selected="true"] p { color: var(--text) !important; }
+  [data-baseweb="tab-border"] { background: var(--border) !important; }
+  div[role="dialog"] { background: var(--card) !important; color: var(--text) !important; }
+  [data-testid="stChatMessage"] { background: var(--strip) !important; }
+  input, textarea { background: var(--strip) !important; color: var(--text) !important; }
+  .st-key-agent_fab button { background: var(--card) !important; color: var(--text) !important; }
+  [data-testid="stToolbar"] * { color: var(--muted) !important; }"""
     else:
-        reason = "HELD OUT FOR MEASUREMENT" if dec is not None and dec.holdout else "NO OFFER"
-        phone = f'<div class="push muted">No notification sent ({reason.lower()})</div>'
-        pin = f'<div class="pinpad">WELCOME BACK!<br>SCAN YOUR ITEMS<br><span class="muted">{reason}</span></div>'
-    if dec is None or not dec.app_user:
-        return f'<div class="loc muted">No app: loyalty ID scanned at the pin-pad</div>{pin}'
-    return (f'<div class="phone"><div class="bar"><span>{ts:%H:%M}</span><span>5G</span></div>{loc}{phone}</div>'
-            f'{pin}')
+        css += ".st-key-agent_fab button { background:#1B3139 !important; color:#FFFFFF !important; border-color:#1B3139 !important; }"
+    st.markdown(f"<style>{css}</style>", unsafe_allow_html=True)
 
 
-PERMISSION_PROMPT = """<div class="phone"><div class="bar"><span>7-Eleven app</span><span>5G</span></div>
-<div class="push"><div class="msg">Allow “7-Eleven” to use your location?</div>
-<div class="muted">We'll send you deals the moment you walk into a store.</div>
-<div style="margin-top:8px;font-weight:600;color:#1B5162">Allow While Using App<br>Allow Once<br>Don't Allow</div></div></div>"""
+def chart_style(c):
+    """Axis and legend colors that read in the current mode."""
+    v = DARK if st.session_state.get("dark") else LIGHT
+    return c.configure_axis(labelColor=v["muted"], domainColor=v["border"], tickColor=v["border"]) \
+            .configure_legend(labelColor=v["text2"]).configure_view(stroke=None)
 
 
-with st.sidebar:
-    st.markdown("**Data source**")
-    st.caption(data.source_label())
-    st.caption(f"Signed in as {data.current_user()}")
-    st.divider()
-    st.markdown("**Push to a phone**")
-    st.caption(f"Push stack: {push.label()}")
-    send_pushes = st.toggle("Send real pushes", value=push.configured(), disabled=not push.configured())
-    st.caption("In production the retailer's app calls the endpoint when the shopper arrives, and their "
-               "existing push stack delivers the offer. For the demo, offers can go to the ntfy app on a phone.")
-    st.divider()
-    st.caption("Live day 2026-09-30, replayed from the check-in stream. All shoppers, stores, and numbers "
-               "are synthetic.")
+KIND_COLOR = {"Scale": "#00A972", "Retarget": "#FEAB03", "Stop or switch": "#FF3621"}
 
-def render_agent_tab():
-    """Agent briefing: what's working, what isn't, and what to do next. Promotion level only."""
+
+def kpi(col, label, value, pill=""):
+    col.markdown(f'<div class="kpi"><div class="l">{label}</div><div class="v">{value}</div>'
+                 f'<div class="s">{pill}</div></div>', unsafe_allow_html=True)
+
+
+def scenario_card(r, prog, hurdle):
+    """One agent action as a scenario card: what it changes, the numbers, the status, the AI's reason."""
+    roic = prog.roic if prog is not None else None
+    met = roic is not None and roic >= hurdle
+    enough = prog is not None and bool(prog.enough_data)
+    roic_txt = f"{roic:.1%}" if roic is not None and enough else "–"
+    acc_txt = f"{prog.acceptance_rate:.0%}" if prog is not None and prog.acceptance_rate == prog.acceptance_rate else "–"
+    conf = ('<span class="pill good">High</span>' if enough else '<span class="pill warn">Low</span>')
+    cost = agent.money(prog.discount_cost) if prog is not None else "$0"
+    thr = (f'<span class="pill good">Met</span>' if met else '<span class="pill bad">Below</span>') if enough else \
+        '<span class="pill">Too early</span>'
+    return (f'<div class="sc"><div class="bar" style="background:{KIND_COLOR.get(r["kind"], "#618693")}"></div>'
+            f'<div class="in"><h4>{html.escape(r["title"])}</h4><div class="d">{html.escape(r["kind"])}</div>'
+            f'<div class="strip"><div><span>Profit / yr</span><b class="g">{agent.money(r["impact"], True)}</b></div>'
+            f'<div><span>Program ROIC</span><b class="{"g" if met else "r"}">{roic_txt}</b></div>'
+            f'<div><span>Acceptance</span><b>{acc_txt}</b></div></div>'
+            f'<div class="tags"><div><span class="lb">Confidence</span>{conf}</div><div><span class="lb">Discount / yr</span>'
+            f'<span class="pill">{cost}</span></div><div><span class="lb">Hurdle</span>{thr}</div></div>'
+            f'<div class="ai"><b>AI:</b> {html.escape(r["why"])}</div></div></div>')
+
+
+def render_overview():
     b = agent.briefing()
-    st.header("Offer agent")
-    st.caption("The decision endpoint runs on every check-in in the background. The agent watches the results "
-               "against the 10% holdout, tells you what's working and what isn't, and recommends what to change. "
-               "Ask it anything with the button in the corner.")
+    ft, fin = agent.finance_table()
+    t, _ = finance.network_pnl()
+    progs = t.set_index("promotion_id") if not t.empty else None
+    pending = sum(agent.proposal_status(r) == "proposed" for r in b["recs"][:3])
 
-    mix, lift, perf = b["mix"], b["lift"], b["perf"]
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Net margin a month, model targeting", agent.money(b["model_month"]),
-              f"{agent.money(b['model_month'] - b['rules_month'], True)} vs static rules")
-    if perf:
-        k2.metric("Acceptance rate", f"{perf['acceptance_rate']:.0%}",
-                  f"{perf['redemption_rate']:.0%} redeemed vs {perf['holdout_rate']:.0%} in holdout", delta_color="off")
-        k3.metric("Return on spend", f"{perf['return_on_spend']:.0%}",
-                  f"{agent.money(perf['net_return'], True)} net after discounts and compute", delta_color="off",
-                  help=f"Net return / (discounts + compute). Compute is ${perf['cost_per_decision']:.5f} a decision.")
-    k4.metric("Model check: measured lift", f"{lift['Persuadable'] * 100:+.0f} pts",
-              f"{lift['Sure Thing'] * 100:+.0f} pts for shoppers it skips", delta_color="off")
-    if mix:
-        st.caption(f"Today: {mix['served']:.0%} of check-ins got an offer, {mix['no_offer']:.0%} needed none, "
-                   f"{mix['holdout']:.0%} were held back to measure. Every decision and outcome is stored in "
-                   f"Unity Catalog (`offer_outcomes`, `offer_performance`).")
+    h1, h0, h2, h3, h4 = st.columns([3.0, 0.9, 0.9, 1.1, 1.1], vertical_alignment="center")
+    h0.toggle("Dark mode", key="dark")
+    h1.markdown('<div class="eyebrow">7-Eleven Offer Engine</div><div class="ptitle">Overview</div>',
+                unsafe_allow_html=True)
+    h2.markdown(f'<div class="bell">Approvals <b>{pending}</b></div>', unsafe_allow_html=True)
+    if fin:
+        if h3.download_button("Finance report", agent.finance_report_html(b, ft, fin),
+                              file_name="offer-engine-finance-report.html", mime="text/html",
+                              icon=":material/description:", width="stretch"):
+            agent.record_activity("report", "Downloaded finance report")
+        if h4.download_button("Export to EPM", agent.epm_export_csv(), file_name="offer-engine-actuals.csv",
+                              mime="text/csv", icon=":material/upload_file:", width="stretch",
+                              help="Actuals for Anaplan or Jedox"):
+            agent.record_activity("export", "Exported actuals for EPM")
 
-    left, right = st.columns(2)
-    with left:
-        with st.container(border=True):
-            st.subheader("What's working")
-            for w in b["working"]:
-                st.markdown(f":green[**{w['title']}.**] {w['detail']}")
-    with right:
-        with st.container(border=True):
-            st.subheader("What isn't")
-            for n in b["not_working"]:
-                st.markdown(f":red[**{n['title']}.**] {n['detail']}")
+        st.write("")
+        k = st.columns(4)
+        gap = (fin["roic"] - fin["hurdle_rate"]) * 100
+        kpi(k[0], "Incremental sales / yr", agent.money(fin["incremental_sales"]), '<span class="pill">Top line</span>')
+        kpi(k[1], "Operating profit / yr", agent.money(fin["operating_profit"], True),
+            '<span class="pill">Bottom line</span>')
+        kpi(k[2], "ROIC", f"{fin['roic']:.1%}",
+            f'<span class="pill {"good" if gap >= 0 else "bad"}">{gap:+.1f} pts vs {fin["hurdle_rate"]:.1%} hurdle</span>')
+        kpi(k[3], "Compute per decision", f"${fin['cost_per_decision']:.5f}", '<span class="pill">Databricks</span>')
 
-    st.subheader("Recommendations")
-    st.caption("Ranked by monthly margin. Changing an offer needs your approval; that comes in the next release.")
-    for i, r in enumerate(b["recs"], 1):
-        with st.container(border=True):
-            c1, c2, c3 = st.columns([4, 1.2, 1.1], vertical_alignment="center")
-            color = "red" if r["kind"] == "Stop or switch" else ("orange" if r["kind"] == "Retarget" else "green")
-            c1.markdown(f"**{i}. {r['title']}**  \n:{color}[{r['kind']}] · {r['why']}")
-            c2.metric("Margin a month", agent.money(r["impact"], True), label_visibility="visible")
-            if c3.button("Ask the agent", key=f"ask_rec_{i}", width="stretch"):
-                agent_chat(r["ask"])
+    if not t.empty:
+        names = data.table("promotions").set_index("promotion_id").short_name
+        c1, c2 = st.columns([1.25, 1])
+        with c1.container(border=True):
+            st.markdown('<div class="sec" style="margin-top:0">ROIC by offer program vs hurdle</div>',
+                        unsafe_allow_html=True)
+            d = t.assign(program=t.promotion_id.map(names),
+                         status=t.apply(lambda r: "Too early" if not r.enough_data else
+                                        ("Clears" if r.clears_hurdle else "Below"), axis=1))
+            d = d[d.status != "Too early"]
+            bars = alt.Chart(d).mark_bar(cornerRadiusEnd=4, height=22).encode(
+                x=alt.X("roic:Q", title=None, axis=alt.Axis(format="%", grid=False)),
+                y=alt.Y("program:N", sort="-x", title=None),
+                color=alt.Color("status:N", scale=alt.Scale(domain=["Clears", "Below"],
+                                range=["#00A972", "#FF3621"]), legend=alt.Legend(orient="bottom", title=None)),
+                tooltip=["program", alt.Tooltip("roic:Q", format=".1%"), "status"])
+            rule = alt.Chart(pd.DataFrame({"h": [hurdle_now()]})).mark_rule(color="#FEAB03", strokeDash=[4, 3]).encode(x="h:Q")
+            st.altair_chart(chart_style((bars + rule).properties(height=220, background="transparent")), width="stretch")
+        with c2.container(border=True):
+            st.markdown('<div class="sec" style="margin-top:0">Acceptance vs holdout by daypart</div>',
+                        unsafe_allow_html=True)
+            p = data.table("offer_performance").groupby("daypart")[["accepted", "delivered", "redeemed",
+                                                                    "offers_served", "holdout_redeemed",
+                                                                    "holdout_checkins"]].sum()
+            dd = pd.DataFrame({"daypart": p.index,
+                               "Redeemed with offer": p.redeemed / p.offers_served.clip(lower=1),
+                               "Holdout": p.holdout_redeemed / p.holdout_checkins.clip(lower=1)}).melt(
+                "daypart", var_name="group", value_name="rate")
+            ch = alt.Chart(dd).mark_bar(cornerRadiusEnd=3).encode(
+                x=alt.X("daypart:N", title=None, sort=["Morning", "Midday", "Afternoon", "Evening", "Late Night"],
+                          axis=alt.Axis(labelAngle=0)),
+                xOffset="group:N", y=alt.Y("rate:Q", title=None, axis=alt.Axis(format="%", grid=False)),
+                color=alt.Color("group:N", scale=alt.Scale(range=["#618693", "#FF3621"]),
+                                legend=alt.Legend(orient="bottom", title=None)),
+                tooltip=["daypart", "group", alt.Tooltip("rate:Q", format=".1%")])
+            st.altair_chart(chart_style(ch.properties(height=220, background="transparent")), width="stretch")
 
+    st.markdown('<div class="sec">Actions for approval</div>', unsafe_allow_html=True)
     agent.record_proposals(b["recs"])
-    st.caption("Promotion-level results only. Each recommendation is stored in `agent_proposals` for approval.")
+    hurdle = fin.get("hurdle_rate", finance.assumptions()["hurdle_rate"])
+    cols = st.columns(3)
+    for i, r in enumerate(b["recs"][:3]):
+        prog = progs.loc[r["promotion_id"]] if progs is not None and r["promotion_id"] in progs.index else None
+        with cols[i]:
+            st.markdown(scenario_card(r, prog, hurdle), unsafe_allow_html=True)
+            status = agent.proposal_status(r)
+            if status == "proposed":
+                a1, a2, a3 = st.columns(3)
+                if a1.button("Approve", key=f"ap_{i}", type="primary", width="stretch"):
+                    agent.decide_proposal(r, "approved")
+                    st.rerun()
+                if a2.button("Reject", key=f"rj_{i}", width="stretch"):
+                    agent.decide_proposal(r, "rejected")
+                    st.rerun()
+                if a3.button("Ask Genie", key=f"ask_rec_{i}", width="stretch"):
+                    st.session_state["_open_chat"] = r["ask"]
+            else:
+                st.markdown(f'<span class="pill {"good" if status == "approved" else "bad"}">'
+                            f'{status.capitalize()}</span>', unsafe_allow_html=True)
+
+    st.markdown('<div class="sec">Offer programs</div>', unsafe_allow_html=True)
+    if not t.empty:
+        names = data.table("promotions").set_index("promotion_id").short_name
+        t = t.sort_values("operating_profit", ascending=False)
+        cols = st.columns(len(t))
+        for c, (_, r) in zip(cols, t.iterrows()):
+            ok, enough = bool(r.clears_hurdle), bool(r.enough_data)
+            pill = (f'<span class="pill {"good" if ok else "bad"}">{"Clears hurdle" if ok else "Below hurdle"}</span>'
+                    if enough else '<span class="pill warn">Too early to call</span>')
+            c.markdown(
+                f'<div class="sc"><div class="bar" style="background:{"#00A972" if ok and enough else "#FEAB03" if not enough else "#FF3621"}"></div>'
+                f'<div class="in"><h4>{html.escape(str(names.get(r.promotion_id, r.promotion_id)))}</h4>{pill}'
+                f'<div class="strip"><div><span>ROIC</span><b class="{"g" if ok else "r"}">'
+                f'{f"{r.roic:.1%}" if enough else "–"}</b></div><div><span>Profit / yr</span>'
+                f'<b>{agent.money(r.operating_profit, True)}</b></div><div><span>Accepted</span>'
+                f'<b>{r.acceptance_rate:.0%}</b></div></div></div></div>', unsafe_allow_html=True)
 
 
-@st.dialog("Offer agent", width="large")
+def render_reporting():
+    url, embed = agent.dashboard_urls()
+    if embed:
+        st.iframe(embed, height=1100) if hasattr(st, "iframe") else st.components.v1.iframe(embed, height=1100)
+        st.link_button("Open in Databricks", url, icon=":material/open_in_new:")
+    elif url:
+        st.link_button("Open the AI/BI dashboard", url, type="primary", icon=":material/open_in_new:")
+    else:
+        st.info("The AI/BI dashboard appears here once the bundle deploys it.")
+
+
+@st.dialog("Ask Genie", width="large")
 def agent_chat(question=None):
     """The floating chat. Opens from the corner button on any tab, or from a recommendation."""
     ss = st.session_state
@@ -190,10 +259,7 @@ def agent_chat(question=None):
     box = st.container(height=420)
     with box:
         if not ss.chat:
-            st.markdown("Ask what's working, what isn't, or what to change. For example:  \n"
-                        "- *Which offers lose money, and why?*  \n"
-                        "- *What should we change this week to raise margin?*  \n"
-                        "- *How fast is the decision endpoint today?*")
+            st.caption("Try: Which offer programs are below the hurdle? What should we change this week?")
         for msg in ss.chat:
             with st.chat_message(msg["role"]):
                 if msg.get("routed"):
@@ -220,155 +286,34 @@ def agent_chat(question=None):
             with st.chat_message("assistant"):
                 with st.spinner("Thinking..."):
                     reply = agent.ask([{"role": x["role"], "content": x["content"]} for x in ss.chat])
+                # Draw the reply in place: a fragment rerun is not allowed when the dialog was just opened
+                if reply.get("routed"):
+                    st.caption(f"Answered by: {reply['routed']}")
+                st.markdown(reply["content"])
+                for t in reply.get("tables", []) or []:
+                    st.dataframe(t, hide_index=True, width="stretch")
+                for sql in reply.get("sql", []) or []:
+                    with st.expander("SQL it ran"):
+                        st.code(sql, language="sql")
         ss.chat.append(reply)
         agent.record_activity("question", q, reply.get("routed", ""))
-        st.rerun(scope="fragment")
     if ss.chat and st.button("Clear conversation", type="tertiary"):
         ss.chat = []
         st.rerun(scope="fragment")
 
 
-st.title("Real-Time Next Best Offer")
-st.markdown("While a shopper is in the store, the system picks the promotion most likely to get that person to "
-            "add to their basket and sends it to them right then.")
 
-tab_agent, tab1 = st.tabs(["Agent", "In-Store Live"])
+apply_mode(st.session_state.get("dark", False))
 
-# ==========================================
-# AGENT
-# ==========================================
-with tab_agent:
-    render_agent_tab()
+tab_overview, tab_reporting = st.tabs(["Overview", "Reporting"])
+with tab_overview:
+    render_overview()
+with tab_reporting:
+    render_reporting()
 
-# ==========================================
-# IN-STORE LIVE
-# ==========================================
-with tab1:
-    st.header("In-Store Live")
-    st.caption("Each check-in (the app's shared location says the shopper entered the store, or a loyalty ID scan "
-               "at the pin-pad) is scored the moment it arrives. The shopper gets one offer, or none, while they "
-               "are still in the aisle.")
-
-    stores = data.stores_by_traffic()
-    labels = [f"Store {r.store_id} · {r.city}, {r.region} · {r.check_ins} check-ins" for r in stores.itertuples()]
-    c0, c1, c2, c3 = st.columns([2.2, 1, 1, 1])
-    default_store = int(np.argmax(stores.has_fresh_bakery.astype(bool).to_numpy())) if len(stores) else 0
-    pick = c0.selectbox("Store", labels, index=default_store)
-    store_id = int(stores.store_id.iloc[labels.index(pick)])
-    events, scores, profiles, fetch_ms = data.store_feed(store_id)
-    prof_by_id = profiles.set_index("member_id")
-
-    ss = st.session_state
-    if ss.get("live_store") != store_id:
-        ss.live_store, ss.live_pos, ss.live_log = store_id, 0, []
-        # Start the replay just before the first morning offer, so the first clicks show a push
-        day = nd.decide(nd.offer_candidates(events, scores, profiles[["member_id", "marketing_opt_in"]]))
-        served = day[(day.decision == "Offer served") & day.app_user.astype(bool)
-                     & (pd.to_datetime(day.event_ts).dt.hour >= 6)]
-        hero = served[served.promotion_id == "PR01"]
-        served = hero if len(hero) else served
-        first = events.index[events.event_id == served.event_id.min()] if len(served) else events.index[:1]
-        ss.live_pos = int(first[0]) if len(first) else 0
-
-    def advance(n=None, minutes=None):
-        start = ss.live_pos
-        if minutes is not None:
-            end_ts = events.event_ts.iloc[min(start, len(events) - 1)] + pd.Timedelta(minutes=minutes)
-            stop = int((events.event_ts < end_ts).sum())
-        else:
-            stop = start + (n or 1)
-        stop = min(max(stop, start + 1), len(events))
-        new = []
-        for i in range(start, stop):
-            ev = events.iloc[i]
-            dec, ms, served_by, _, _ = serve_decision(ev, scores, profiles)
-            if dec is None:
-                continue
-            new.append({"event_id": int(ev.event_id), "store_id": store_id, "member_id": int(ev.member_id),
-                        "time": ev.event_ts, "trigger": ev.trigger, "first_scan": ev.first_scan_label,
-                        "decision": dec.decision, "promotion_id": dec.promotion_id,
-                        "offer": dec.offer_message if dec.decision == "Offer served" else None,
-                        "channel": dec.channel, "reason": dec.reason, "latency_ms": round(ms, 1),
-                        "served_by": served_by, "_dec": dec})
-            payload = nd.push_payload({**dec.to_dict(), "event_id": int(ev.event_id), "store_id": store_id}) \
-                if dec.decision == "Offer served" and bool(ev.app_user) else None
-            push_status, push_ms = push.send(payload, int(ev.member_id)) if (payload and send_pushes) else (
-                "simulated" if payload else "no push", 0.0)
-            new[-1].update({"push": push_status, "_payload": payload})
-        ss.live_pos = stop
-        ss.live_log = ss.live_log + new
-        data.log_decisions([{k: v for k, v in r.items() if k not in ("_dec", "time", "trigger", "first_scan",
-                                                                       "offer", "reason", "served_by", "push",
-                                                                       "_payload")}
-                            for r in new])
-
-    done = ss.live_pos >= len(events)
-    if c1.button("Next shopper walks in", type="primary", disabled=done, width="stretch"):
-        advance(n=1)
-    if c2.button("Play 15 minutes", disabled=done, width="stretch"):
-        advance(minutes=15)
-    st.caption(f"Decisions come from the {data.endpoint_label()}."
-               + (f" Last error: {ss['endpoint_error']}" if ss.get("endpoint_error") else ""))
-    if c3.button("Reset store", width="stretch"):
-        ss.live_store = None
-        st.rerun()
-
-    log = pd.DataFrame(ss.live_log)
-    k1, k2, k3, k4, k5 = st.columns(5)
-    if len(log):
-        served = (log.decision == "Offer served").sum()
-        k1.metric("Check-ins decided", f"{len(log):,}")
-        k2.metric("Offers served", f"{served:,}", f"{served / len(log):.0%} of check-ins", delta_color="off")
-        k3.metric("Suppressed (no offer moves them)", f"{(log.decision == 'No offer').sum():,}")
-        k4.metric("Held out (10%)", f"{(log.decision.str.startswith('Holdout')).sum():,}")
-        k5.metric("Check-in → offer, p50 / p95", f"{np.percentile(log.latency_ms, 50):.0f} / "
-                                                f"{np.percentile(log.latency_ms, 95):.0f} ms", delta_color="off")
-    else:
-        k1.metric("Check-ins decided", "0")
-        k2.metric("Store clock", f"{events.event_ts.iloc[ss.live_pos]:%H:%M}" if not done else "end of day")
-        k5.metric("Shopper data prefetch", f"{fetch_ms:,.0f} ms", "one query per store", delta_color="off")
-        pc, tc = st.columns([1, 1.4])
-        pc.markdown(PERMISSION_PROMPT, unsafe_allow_html=True)
-        tc.markdown("**How a check-in fires.** The shopper shares their location with the 7-Eleven app once. "
-                    "When they walk into a store, the app sends an *entered store* event with their loyalty ID. "
-                    "That event is scored on the spot and the offer comes back as a push notification, and on the "
-                    "pin-pad when they reach the counter. Shoppers without the app are scored when they scan "
-                    "their loyalty ID at the pin-pad.")
-        tc.info("Click **Next shopper walks in** to stream the first check-in through the decision path.")
-
-    if len(log):
-        last = ss.live_log[-1]
-        dec = last["_dec"]
-        prof = prof_by_id.loc[last["member_id"]] if last["member_id"] in prof_by_id.index else None
-        st.divider()
-        left, right = st.columns([1, 1.4])
-        with left:
-            seg = prof.crm_segment if prof is not None else "Loyalty shopper"
-            st.subheader(f"{last['time']:%H:%M} · {seg} walked in")
-            st.markdown(offer_card(dec, prof, last["time"]), unsafe_allow_html=True)
-        with right:
-            st.subheader("Decision")
-            offer = (f" → **{PROMOS.at[dec.promotion_id, 'short_name']}**" if dec.decision == "Offer served" else "")
-            st.markdown(f"**{dec.decision}**{offer} · {last['latency_ms']:.0f} ms · {last['served_by']}")
-            if last.get("_payload"):
-                st.markdown(f"**iOS push:** {last['push']}")
-                with st.expander("Push payload (APNs format)"):
-                    st.json(last["_payload"])
-
-        st.subheader("Decision stream")
-        feed = log.drop(columns=["_dec", "_payload", "store_id", "promotion_id", "served_by"]).iloc[::-1]
-        feed["time"] = feed.time.dt.strftime("%H:%M")
-        st.dataframe(
-            feed[["time", "trigger", "first_scan", "decision", "offer", "push", "latency_ms"]],
-            column_config={"latency_ms": st.column_config.NumberColumn("ms", format="%.1f")},
-            hide_index=True, width="stretch", height=300)
-        st.caption("Every decision is appended to `live_decision_log` in Unity Catalog, next to the full-day "
-                   "`offer_decisions` table written by the streaming decision job.")
-
-
-# ==========================================
-# FLOATING AGENT BUTTON (every tab)
-# ==========================================
 with st.container(key="agent_fab"):
-    if st.button("Ask the agent", icon=":material/forum:", type="primary"):
-        agent_chat()
+    if st.button("Ask Genie", icon=":material/forum:", type="primary"):
+        st.session_state["_open_chat"] = ""
+# One dialog per run, whichever button opened it
+if "_open_chat" in st.session_state:
+    agent_chat(st.session_state.pop("_open_chat") or None)

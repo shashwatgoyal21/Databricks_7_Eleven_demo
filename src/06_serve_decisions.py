@@ -57,6 +57,44 @@ sys.path.insert(0, APP_DIR)
 from databricks.feature_engineering import FeatureEngineeringClient, FeatureLookup
 
 fe = FeatureEngineeringClient(model_registry_uri="databricks-uc")
+
+
+def republish(source_table, online_table):
+    """Publish a feature table to the online store, replacing a previous publish.
+
+    Each build run drops and recreates the Delta source tables, so an online table from an earlier run
+    still points at the old table and serving fails with "No suitable online store found". Delete it
+    (and its Postgres copy) first, then publish again."""
+    import time
+
+    from databricks.sdk import WorkspaceClient
+    from databricks.sdk.errors import NotFound
+
+    ws = WorkspaceClient()
+    try:
+        ws.database.get_synced_database_table(online_table)
+        ws.database.delete_synced_database_table(online_table, purge_data=True)
+        print(f"Deleted stale online table {online_table}")
+        for _ in range(40):
+            try:
+                ws.database.get_synced_database_table(online_table)
+                time.sleep(15)
+            except NotFound:
+                break
+    except NotFound:
+        pass
+    last = None
+    for _ in range(8):
+        try:
+            fe.publish_table(online_store=online_store, source_table_name=source_table,
+                             online_table_name=online_table, publish_mode="CONTINUOUS")
+            print(f"Published {source_table} to {online_store_name} as {online_table} (CONTINUOUS)")
+            return
+        except Exception as e:  # the Postgres drop can lag the UC delete
+            last = e
+            print(f"Publish of {online_table} not ready yet: {str(e).splitlines()[0][:200]}")
+            time.sleep(30)
+    raise last
 features_table = f"{fq}.member_features"
 
 spark.sql(f"ALTER TABLE {features_table} ALTER COLUMN member_id SET NOT NULL")
@@ -78,18 +116,7 @@ if online_store is None:
             break
         time.sleep(15)
 
-try:
-    fe.publish_table(
-        online_store=online_store,
-        source_table_name=features_table,
-        online_table_name=f"{features_table}_online",
-        publish_mode="CONTINUOUS",
-    )
-    print(f"Published {features_table} to {online_store_name} (CONTINUOUS)")
-except Exception as e:
-    # On a rerun the build job recreates member_features; delete the online table in Catalog Explorer
-    # and rerun this notebook if the existing publish is no longer syncing.
-    print(f"Publish skipped: {str(e).splitlines()[0]}")
+republish(features_table, f"{features_table}_online")
 
 # COMMAND ----------
 
@@ -119,11 +146,7 @@ except Exception as e:
     if "already exists" not in str(e).lower():
         raise
 spark.sql(f"ALTER TABLE {stores_table} SET TBLPROPERTIES ('delta.enableChangeDataFeed' = 'true')")
-try:
-    fe.publish_table(online_store=online_store, source_table_name=stores_table,
-                     online_table_name=f"{stores_table}_online", publish_mode="CONTINUOUS")
-except Exception as e:
-    print(f"Publish skipped for stores: {str(e).splitlines()[0]}")
+republish(stores_table, f"{stores_table}_online")
 
 request_cols = nd.CHECKIN_FIELDS
 events = spark.table(f"{fq}.instore_events").select(*request_cols)

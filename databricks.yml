@@ -71,6 +71,27 @@ resources:
             base_parameters:
               catalog: ${var.catalog}
               schema: ${var.schema}
+        - task_key: offer_ledger
+          depends_on:
+            - task_key: governance
+          notebook_task:
+            notebook_path: ./src/07_offer_ledger.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              endpoint_name: ${var.endpoint_name}
+              app_name: nbo-decision-engine
+        - task_key: agent
+          depends_on:
+            - task_key: offer_ledger
+          notebook_task:
+            notebook_path: ./src/08_agent.py
+            base_parameters:
+              catalog: ${var.catalog}
+              schema: ${var.schema}
+              warehouse_id: ${var.warehouse_id}
+              app_name: nbo-decision-engine
+              genie_space_id: ""
 
   apps:
     nbo_app:

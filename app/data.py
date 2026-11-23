@@ -269,3 +269,27 @@ def log_decisions(rows):
                    VALUES {", ".join(values)}""", params)
     except Exception as e:  # logging must never break the live demo
         st.toast(f"Decision log write skipped: {str(e).splitlines()[0][:120]}")
+
+
+def append_rows(name, rows):
+    """Append rows to a ledger table (agent_proposals, agent_activity, promotion_changes). Never raises."""
+    if not rows:
+        return
+    df = pd.DataFrame(rows)
+    if LOCAL:
+        path = Path(LOCAL_DIR) / f"{name}.csv"
+        df.to_csv(path, mode="a", header=not path.exists(), index=False)
+        return
+    try:
+        cols = list(df.columns)
+        values, params = [], {}
+        for i, r in enumerate(df.to_dict("records")):
+            values.append("(" + ", ".join(f"CAST(:{c}{i} AS TIMESTAMP)" if c.endswith("_at")
+                                          else (f"CAST(:{c}{i} AS DATE)" if c.endswith("_date") else f":{c}{i}")
+                                          for c in cols) + ")")
+            for c in cols:
+                v = r.get(c)
+                params[f"{c}{i}"] = None if pd.isna(v) else (v.item() if hasattr(v, "item") else v)
+        _query(f"INSERT INTO {SCHEMA}.{name} ({', '.join(cols)}) VALUES {', '.join(values)}", params)
+    except Exception as e:  # a ledger write must never break the app
+        st.toast(f"{name} write skipped: {str(e).splitlines()[0][:120]}")

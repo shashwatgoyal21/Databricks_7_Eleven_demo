@@ -1,2 +1,27 @@
+# Databricks brand system: Oat / Ink base, Lava accent only, Green and Amber for status, DM Sans and DM Mono.
 [theme]
-primaryColor = "#008163"
+base = "light"
+primaryColor = "#FF3621"
+backgroundColor = "#F9F7F4"
+secondaryBackgroundColor = "#EEEDE9"
+textColor = "#0B2026"
+linkColor = "#1B5162"
+borderColor = "#DBD7CE"
+showWidgetBorder = true
+baseRadius = "8px"
+font = "DM Sans:https://fonts.googleapis.com/css2?family=DM+Sans:opsz,wght@9..40,400;9..40,500;9..40,700&display=swap"
+codeFont = "DM Mono:https://fonts.googleapis.com/css2?family=DM+Mono:wght@400;500&display=swap"
+headingFontWeights = [700, 700, 500, 500, 500, 500]
+greenColor = "#00A972"
+orangeColor = "#FEAB03"
+redColor = "#970F29"
+blueColor = "#1B5162"
+violetColor = "#618693"
+grayColor = "#4A5E68"
+chartCategoricalColors = ["#1B3139", "#FF3621", "#00A972", "#FEAB03", "#618693", "#1B5162"]
+
+[theme.sidebar]
+backgroundColor = "#1B3139"
+secondaryBackgroundColor = "#0B2026"
+textColor = "#FFFFFF"
+borderColor = "#1B5162"

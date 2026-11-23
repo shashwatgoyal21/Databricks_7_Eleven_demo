@@ -94,6 +94,8 @@ Deploy creates the app before the job runs, so notebook 06 can grant the app's s
 | 5 | `05_stream_decisions.py` | Structured Streaming over `instore_events`: runs the decision path per micro-batch, writes `offer_decisions` |
 | 6 | `06_serve_decisions.py` | Feature table + online store, logs `nbo_decision_service` with feature lookups, creates the `nbo-decision` endpoint with an inference table, grants the app, sends one test check-in |
 | 4 | `04_governance.py` | Metric view, row filter, PII mask, `live_decision_log`, and grants |
+| 7 | `07_offer_ledger.py` | Stores what happened after every decision: `offer_outcomes` (delivered, accepted, redeemed, discount, compute cost), `offer_performance` (acceptance rate, lift vs holdout, net return, return on spend), `compute_cost` (from `system.billing` when readable), and the `promotion_changes`, `agent_proposals` and `agent_activity` logs. Grants the app write access to the three logs |
+| 8 | `08_agent.py` | Creates the Genie space and the "NBO Offer Agent" Multi-Agent Supervisor, gives the app access, and writes `agent_config` so the app's chat finds them (the supervisor's endpoint takes about 10 minutes) |
 
 The job runs them in the order above. Rerunning rebuilds everything except `live_decision_log`. On a rerun, `member_features` is recreated; if the online table stops syncing, delete `member_features_online` in Catalog Explorer and rerun step 6.
 
@@ -108,7 +110,7 @@ For production, point check-ins at Zerobus (or Kafka) so they land in `instore_e
    GRANT MODIFY ON TABLE workspace.nbo_demo.live_decision_log TO `<app service principal>`;
    ```
 2. Click through the app once so `nbo_decision_payload` has rows, then import `dashboard/nbo_promotions.lvdash.json` (Dashboards > Create > Import), or build it by hand from `dashboard/datasets.sql` and `dashboard/layout.md`. The datasets use `workspace.nbo_demo`; edit them if you deployed elsewhere.
-3. Create the Genie space from `genie/genie_space.md`, about 10 minutes, then put its ID in `GENIE_SPACE_ID` in `app/app.yaml` and redeploy the app to turn on the Ask Genie tab.
+3. The agent. Step 8 sets up the Genie space and the supervisor. If it prints that a step failed, create that piece in the UI as the printout says, then rerun only the `agent` task with the `genie_space_id` parameter. The app's chat uses the supervisor when it's ready, the Genie space until then.
 4. Test governance: sign in as a user who is only in `nbo_region_texas`. The dashboard and Genie should show Texas only, and `SELECT email FROM loyalty_members` should return `***`.
 
 ## Preview locally, no workspace

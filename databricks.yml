@@ -84,8 +84,14 @@ resources:
             permission: CAN_USE
 
 targets:
-  dev:
+  trial:
     mode: development
     default: true
+    workspace:
+      host: https://dbc-8d181d91-4a82.cloud.databricks.com
+    variables:
+      warehouse_id: 7b83e80f825c883f
+  dev:
+    mode: development
     workspace:
       host: https://dbc-658a2a7c-0afe.cloud.databricks.com

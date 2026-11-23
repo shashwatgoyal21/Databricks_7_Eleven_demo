@@ -679,7 +679,85 @@ def run_all(members=25_000, seed=711):
     scores = score_members(models, score_f)
     gold = build_gold(raw, scores, score_f)
     gold["offer_decisions"] = decide(offer_candidates(raw["instore_events"], scores, score_f[["member_id", "marketing_opt_in"]]))
+    gold["offer_outcomes"] = offer_outcomes(gold["offer_decisions"], raw["promotions"])
+    gold["offer_performance"] = offer_performance(gold["offer_outcomes"], raw["promotions"])
     return raw, gold
+
+
+# ---------------------------------------------------------------------------
+# Offer ledger: what happened after each decision, and the measures computed from it
+# ---------------------------------------------------------------------------
+
+# Serving cost per decision when system.billing is not readable (CPU Small endpoint, scale to zero off).
+# 07_offer_ledger.py replaces it with the measured cost per call from system.billing when it can.
+COMPUTE_COST_PER_DECISION = 0.00006
+OUTCOME_COLS = ["event_id", "event_ts", "decision_date", "store_id", "region", "daypart", "trigger",
+                "promotion_id", "decision", "holdout", "channel", "delivered", "accepted", "redeemed",
+                "expected_uplift", "incremental_margin_est", "discount_cost", "compute_cost_usd"]
+
+
+def offer_outcomes(decisions, promotions, cost_per_decision=COMPUTE_COST_PER_DECISION, seed=711):
+    """One row per check-in: the decision plus delivery, acceptance, redemption, discount and compute cost.
+
+    Synthetic outcomes drawn from the model's own probabilities: a served offer is redeemed with
+    p_with_offer, a held-back shopper buys the same item with p_without_offer. In production these
+    columns come from the push provider's delivery receipts, app taps and the POS redemption feed.
+    """
+    rng = np.random.default_rng(seed)
+    d = decisions.copy()
+    n = len(d)
+    promos = promotions.set_index("promotion_id")
+    served = (d.decision == "Offer served").to_numpy()
+    held = d.decision.astype(str).str.startswith("Holdout").to_numpy()
+    p_with = d.p_with_offer.fillna(0).to_numpy()
+    p_without = d.p_without_offer.fillna(0).to_numpy()
+    u = rng.random((3, n))
+    delivered = served & (u[0] < 0.97)
+    redeemed = (delivered & (u[1] < p_with)) | (held & (u[1] < p_without))
+    accepted = delivered & (redeemed | (u[2] < 0.22))
+    unit_margin = d.promotion_id.map(promos.unit_margin).fillna(0).to_numpy()
+    discount = d.promotion_id.map(promos.discount_cost).fillna(0).to_numpy()
+    out = pd.DataFrame({
+        "event_id": d.event_id, "event_ts": d.event_ts, "decision_date": pd.to_datetime(d.event_ts).dt.normalize(),
+        "store_id": d.store_id, "region": d.region, "daypart": d.daypart, "trigger": d.trigger,
+        "promotion_id": d.promotion_id, "decision": d.decision, "holdout": held, "channel": d.channel,
+        "delivered": delivered, "accepted": accepted, "redeemed": redeemed,
+        "expected_uplift": np.where(served, d.uplift.fillna(0), 0.0),
+        "incremental_margin_est": np.where(served, d.uplift.fillna(0) * unit_margin, 0.0),
+        "discount_cost": np.where(served & redeemed, discount, 0.0),
+        "compute_cost_usd": cost_per_decision,
+    })
+    return out[OUTCOME_COLS]
+
+
+def offer_performance(outcomes, promotions):
+    """Daily measures by promotion, region and daypart, computed from the stored outcomes.
+
+    Lift = redemption rate when the offer was shown minus the rate in the 10% holdout.
+    Net return = lift x offers served x unit margin, minus discounts and compute.
+    Return on spend = net return / (discounts + compute). Rates and money only, no shopper rows.
+    """
+    o = outcomes[outcomes.promotion_id.notna()].copy()
+    o["served"] = o.decision == "Offer served"
+    o["held_redeemed"] = o.holdout & o.redeemed
+    o["served_redeemed"] = o.served & o.redeemed
+    keys = ["decision_date", "promotion_id", "region", "daypart"]
+    g = o.groupby(keys).agg(offers_served=("served", "sum"), holdout_checkins=("holdout", "sum"),
+                            delivered=("delivered", "sum"), accepted=("accepted", "sum"),
+                            redeemed=("served_redeemed", "sum"), holdout_redeemed=("held_redeemed", "sum"),
+                            discount_cost=("discount_cost", "sum"), expected_margin=("incremental_margin_est", "sum"),
+                            compute_cost_usd=("compute_cost_usd", "sum")).reset_index()
+    um = g.promotion_id.map(promotions.set_index("promotion_id").unit_margin)
+    g["acceptance_rate"] = g.accepted / g.delivered.where(g.delivered > 0)
+    g["redemption_rate"] = g.redeemed / g.offers_served.where(g.offers_served > 0)
+    g["holdout_redemption_rate"] = g.holdout_redeemed / g.holdout_checkins.where(g.holdout_checkins > 0)
+    # Small cells have few holdout shoppers: fall back to the model's expected margin there
+    measured = (g.redemption_rate - g.holdout_redemption_rate) * g.offers_served * um
+    g["incremental_margin"] = np.where(g.holdout_checkins >= 30, measured, g.expected_margin)
+    g["net_return"] = g.incremental_margin - g.discount_cost - g.compute_cost_usd
+    spend = g.discount_cost + g.compute_cost_usd
+    g["return_on_spend"] = g.net_return / spend.where(spend > 0)
+    return g.drop(columns=["expected_margin"])
 
 
 # Date columns in the raw tables, stored as DATE in Delta

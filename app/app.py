@@ -7,6 +7,7 @@ import numpy as np
 import pandas as pd
 import streamlit as st
 
+import agent
 import data
 import nbo_decision as nd
 import push
@@ -22,19 +23,21 @@ st.markdown("""
         h3 { font-size: 1.08rem !important; }
         [data-testid="stMetricValue"] { font-size: 1.35rem !important; }
         [data-testid="stMetricLabel"] { font-size: 0.85rem !important; }
-        .block-container { padding-top: 1.5rem !important; padding-bottom: 1.5rem !important; }
-        .phone { border: 2px solid #222; border-radius: 22px; padding: 14px 14px 18px; max-width: 300px;
-                 background: #fafafa; }
-        .phone .bar { font-size: 11px; color: #666; display: flex; justify-content: space-between; }
+        .block-container { padding-top: 1.5rem !important; padding-bottom: 5rem !important; }
+        .phone { border: 2px solid #1B3139; border-radius: 22px; padding: 14px 14px 18px; max-width: 300px;
+                 background: #FFFFFF; }
+        .phone .bar { font-size: 11px; color: #4A5E68; display: flex; justify-content: space-between; }
         .phone .push { margin-top: 10px; background: #fff; border-radius: 12px; padding: 10px 12px;
                        box-shadow: 0 1px 4px rgba(0,0,0,.15); }
-        .phone .push .app { font-size: 11px; color: #008060; font-weight: 600; }
+        .phone .push .app { font-size: 11px; color: #1B3139; font-weight: 600; }
         .phone .push .msg { font-size: 14px; font-weight: 600; margin-top: 2px; }
-        .pinpad { border: 2px solid #222; border-radius: 8px; background: #111; color: #eee; padding: 12px;
+        .pinpad { border: 2px solid #0B2026; border-radius: 8px; background: #1B3139; color: #F9F7F4; padding: 12px;
                   max-width: 300px; margin-top: 10px; font-family: monospace; font-size: 12.5px; }
-        .pinpad .hl { color: #7CFC9A; }
-        .muted { color: #888; }
-        .phone .loc { font-size: 11.5px; margin-top: 8px; color: #0a66c2; }
+        .pinpad .hl { color: #00A972; }
+        .muted { color: #4A5E68; }
+        .phone .loc { font-size: 11.5px; margin-top: 8px; color: #1B5162; }
+        .st-key-agent_fab { position: fixed; right: 28px; bottom: 24px; z-index: 999; width: auto !important; }
+        .st-key-agent_fab button { border-radius: 999px; padding: 0.55rem 1.1rem; box-shadow: 0 4px 14px rgba(0,0,0,.18); }
     </style>
 """, unsafe_allow_html=True)
 
@@ -84,7 +87,6 @@ def serve_decision(ev_row, scores, profiles):
 
 def offer_card(dec, prof, ts):
     """Phone push and pin-pad screen for a decision."""
-    name = html.escape(shopper_name(prof).split(" ")[0])
     loc = (f'<div class="loc">Location shared · entered the store at {ts:%H:%M}</div>' if dec is not None and dec.app_user
            else '<div class="loc muted">No app location: loyalty ID scanned at the pin-pad</div>')
     if dec is not None and dec.decision == "Offer served":
@@ -92,11 +94,11 @@ def offer_card(dec, prof, ts):
         phone = (f'<div class="push"><div class="app">7-ELEVEN · now</div>'
                  f'<div class="msg">{msg}</div><div class="muted">Tap to add to your order</div></div>'
                  if dec.app_user else '<div class="push muted">Not an app user: pin-pad only</div>')
-        pin = f'<div class="pinpad">HI {name.upper()}!<br><span class="hl">{msg.upper()}</span><br>[ ADD ]  [ NO THANKS ]</div>'
+        pin = f'<div class="pinpad">WELCOME BACK!<br><span class="hl">{msg.upper()}</span><br>[ ADD ]  [ NO THANKS ]</div>'
     else:
         reason = "HELD OUT FOR MEASUREMENT" if dec is not None and dec.holdout else "NO OFFER"
         phone = f'<div class="push muted">No notification sent ({reason.lower()})</div>'
-        pin = f'<div class="pinpad">HI {name.upper()}!<br>SCAN YOUR ITEMS<br><span class="muted">{reason}</span></div>'
+        pin = f'<div class="pinpad">WELCOME BACK!<br>SCAN YOUR ITEMS<br><span class="muted">{reason}</span></div>'
     if dec is None or not dec.app_user:
         return f'<div class="loc muted">No app: loyalty ID scanned at the pin-pad</div>{pin}'
     return (f'<div class="phone"><div class="bar"><span>{ts:%H:%M}</span><span>5G</span></div>{loc}{phone}</div>'
@@ -106,7 +108,7 @@ def offer_card(dec, prof, ts):
 PERMISSION_PROMPT = """<div class="phone"><div class="bar"><span>7-Eleven app</span><span>5G</span></div>
 <div class="push"><div class="msg">Allow “7-Eleven” to use your location?</div>
 <div class="muted">We'll send you deals the moment you walk into a store.</div>
-<div style="margin-top:8px;font-weight:600;color:#0a66c2">Allow While Using App<br>Allow Once<br>Don't Allow</div></div></div>"""
+<div style="margin-top:8px;font-weight:600;color:#1B5162">Allow While Using App<br>Allow Once<br>Don't Allow</div></div></div>"""
 
 
 with st.sidebar:
@@ -123,20 +125,123 @@ with st.sidebar:
     st.caption("Live day 2026-09-30, replayed from the check-in stream. All shoppers, stores, and numbers "
                "are synthetic.")
 
+def render_agent_tab():
+    """Agent briefing: what's working, what isn't, and what to do next. Promotion level only."""
+    b = agent.briefing()
+    st.header("Offer agent")
+    st.caption("The decision endpoint runs on every check-in in the background. The agent watches the results "
+               "against the 10% holdout, tells you what's working and what isn't, and recommends what to change. "
+               "Ask it anything with the button in the corner.")
+
+    mix, lift, perf = b["mix"], b["lift"], b["perf"]
+    k1, k2, k3, k4 = st.columns(4)
+    k1.metric("Net margin a month, model targeting", agent.money(b["model_month"]),
+              f"{agent.money(b['model_month'] - b['rules_month'], True)} vs static rules")
+    if perf:
+        k2.metric("Acceptance rate", f"{perf['acceptance_rate']:.0%}",
+                  f"{perf['redemption_rate']:.0%} redeemed vs {perf['holdout_rate']:.0%} in holdout", delta_color="off")
+        k3.metric("Return on spend", f"{perf['return_on_spend']:.0%}",
+                  f"{agent.money(perf['net_return'], True)} net after discounts and compute", delta_color="off",
+                  help=f"Net return / (discounts + compute). Compute is ${perf['cost_per_decision']:.5f} a decision.")
+    k4.metric("Model check: measured lift", f"{lift['Persuadable'] * 100:+.0f} pts",
+              f"{lift['Sure Thing'] * 100:+.0f} pts for shoppers it skips", delta_color="off")
+    if mix:
+        st.caption(f"Today: {mix['served']:.0%} of check-ins got an offer, {mix['no_offer']:.0%} needed none, "
+                   f"{mix['holdout']:.0%} were held back to measure. Every decision and outcome is stored in "
+                   f"Unity Catalog (`offer_outcomes`, `offer_performance`).")
+
+    left, right = st.columns(2)
+    with left:
+        with st.container(border=True):
+            st.subheader("What's working")
+            for w in b["working"]:
+                st.markdown(f":green[**{w['title']}.**] {w['detail']}")
+    with right:
+        with st.container(border=True):
+            st.subheader("What isn't")
+            for n in b["not_working"]:
+                st.markdown(f":red[**{n['title']}.**] {n['detail']}")
+
+    st.subheader("Recommendations")
+    st.caption("Ranked by monthly margin. Changing an offer needs your approval; that comes in the next release.")
+    for i, r in enumerate(b["recs"], 1):
+        with st.container(border=True):
+            c1, c2, c3 = st.columns([4, 1.2, 1.1], vertical_alignment="center")
+            color = "red" if r["kind"] == "Stop or switch" else ("orange" if r["kind"] == "Retarget" else "green")
+            c1.markdown(f"**{i}. {r['title']}**  \n:{color}[{r['kind']}] · {r['why']}")
+            c2.metric("Margin a month", agent.money(r["impact"], True), label_visibility="visible")
+            if c3.button("Ask the agent", key=f"ask_rec_{i}", width="stretch"):
+                agent_chat(r["ask"])
+
+    agent.record_proposals(b["recs"])
+    st.caption("Promotion-level results only. Each recommendation is stored in `agent_proposals` for approval.")
+
+
+@st.dialog("Offer agent", width="large")
+def agent_chat(question=None):
+    """The floating chat. Opens from the corner button on any tab, or from a recommendation."""
+    ss = st.session_state
+    ss.setdefault("chat", [])
+    m = agent.mode()
+    st.caption({"supervisor": f"Multi-Agent Supervisor `{agent.config()['endpoint']}`, routing to the Genie space",
+                "genie": "Genie space (the supervisor isn't set up yet)",
+                "local": "Local preview: answers come from the briefing",
+                "none": "Not connected yet"}[m])
+    box = st.container(height=420)
+    with box:
+        if not ss.chat:
+            st.markdown("Ask what's working, what isn't, or what to change. For example:  \n"
+                        "- *Which offers lose money, and why?*  \n"
+                        "- *What should we change this week to raise margin?*  \n"
+                        "- *How fast is the decision endpoint today?*")
+        for msg in ss.chat:
+            with st.chat_message(msg["role"]):
+                if msg.get("routed"):
+                    st.caption(f"Answered by: {msg['routed']}")
+                st.markdown(msg["content"])
+                for t in msg.get("tables", []) or []:
+                    st.dataframe(t, hide_index=True, width="stretch")
+                for q in msg.get("sql", []) or []:
+                    with st.expander("SQL it ran"):
+                        st.code(q, language="sql")
+    with st.form("agent_ask", clear_on_submit=True, border=False):
+        c1, c2 = st.columns([5, 1], vertical_alignment="bottom")
+        typed = c1.text_input("Ask the agent", placeholder="Ask a question or describe a change",
+                              label_visibility="collapsed")
+        sent = c2.form_submit_button("Ask", type="primary", width="stretch")
+    q = question if question and not ss.get("_asked_" + question) else (typed.strip() if sent else "")
+    if question:
+        ss["_asked_" + question] = True
+    if q:
+        ss.chat.append({"role": "user", "content": q})
+        with box:
+            with st.chat_message("user"):
+                st.markdown(q)
+            with st.chat_message("assistant"):
+                with st.spinner("Thinking..."):
+                    reply = agent.ask([{"role": x["role"], "content": x["content"]} for x in ss.chat])
+        ss.chat.append(reply)
+        agent.record_activity("question", q, reply.get("routed", ""))
+        st.rerun(scope="fragment")
+    if ss.chat and st.button("Clear conversation", type="tertiary"):
+        ss.chat = []
+        st.rerun(scope="fragment")
+
+
 st.title("Real-Time Next Best Offer")
 st.markdown("While a shopper is in the store, the system picks the promotion most likely to get that person to "
             "add to their basket and sends it to them right then.")
 
-tab1, tab2, tab3, tab4, tab5 = st.tabs([
-    "1. In-Store Live",
-    "2. Decision Trace",
-    "3. Under the Hood",
-    "4. Does the Model Work?",
-    "5. Ask Genie",
-])
+tab_agent, tab1 = st.tabs(["Agent", "In-Store Live"])
 
 # ==========================================
-# 1. IN-STORE LIVE
+# AGENT
+# ==========================================
+with tab_agent:
+    render_agent_tab()
+
+# ==========================================
+# IN-STORE LIVE
 # ==========================================
 with tab1:
     st.header("In-Store Live")
@@ -238,316 +343,32 @@ with tab1:
         st.divider()
         left, right = st.columns([1, 1.4])
         with left:
-            st.subheader(f"{last['time']:%H:%M} · {shopper_name(prof)} walked in")
+            seg = prof.crm_segment if prof is not None else "Loyalty shopper"
+            st.subheader(f"{last['time']:%H:%M} · {seg} walked in")
             st.markdown(offer_card(dec, prof, last["time"]), unsafe_allow_html=True)
         with right:
-            st.subheader("What the decision path saw")
-            ev = events[events.event_id == last["event_id"]].iloc[0]
-            st.markdown(
-                f"- **Signal:** {ev.trigger} at store {store_id} ({ev.daypart.lower()})\n"
-                f"- **Already scanned:** {ev.first_scan_label}\n"
-                f"- **Days since last visit:** {ev.days_since_prev_visit if ev.days_since_prev_visit < 999 else 'first visit'}\n"
-                f"- **Decision:** {dec.decision}"
-                + (f" → **{PROMOS.at[dec.promotion_id, 'short_name']}**" if dec.decision == "Offer served" else "")
-                + f"\n- **Why:** {dec.reason}\n"
-                f"- **Decided by:** {last['served_by']}, {last['latency_ms']:.0f} ms round trip")
-            if dec.decision == "Offer served":
-                st.success(f"Likelihood to buy moves from {pct(dec.p_without_offer)} to {pct(dec.p_with_offer)} "
-                           f"with the offer. Expected net margin ${dec.expected_net_margin:.2f}.")
+            st.subheader("Decision")
+            offer = (f" → **{PROMOS.at[dec.promotion_id, 'short_name']}**" if dec.decision == "Offer served" else "")
+            st.markdown(f"**{dec.decision}**{offer} · {last['latency_ms']:.0f} ms · {last['served_by']}")
             if last.get("_payload"):
                 st.markdown(f"**iOS push:** {last['push']}")
                 with st.expander("Push payload (APNs format)"):
                     st.json(last["_payload"])
-            st.caption(f"Open event {last['event_id']} in **Decision Trace** to see every offer it scored.")
 
         st.subheader("Decision stream")
         feed = log.drop(columns=["_dec", "_payload", "store_id", "promotion_id", "served_by"]).iloc[::-1]
         feed["time"] = feed.time.dt.strftime("%H:%M")
         st.dataframe(
-            feed[["time", "event_id", "member_id", "trigger", "first_scan", "decision", "offer", "push",
-                  "latency_ms", "reason"]],
-            column_config={"latency_ms": st.column_config.NumberColumn("ms", format="%.1f"),
-                           "event_id": st.column_config.NumberColumn("Event", format="%d"),
-                           "member_id": st.column_config.NumberColumn("Member", format="%d")},
+            feed[["time", "trigger", "first_scan", "decision", "offer", "push", "latency_ms"]],
+            column_config={"latency_ms": st.column_config.NumberColumn("ms", format="%.1f")},
             hide_index=True, width="stretch", height=300)
         st.caption("Every decision is appended to `live_decision_log` in Unity Catalog, next to the full-day "
                    "`offer_decisions` table written by the streaming decision job.")
 
 
 # ==========================================
-# 2. DECISION TRACE
+# FLOATING AGENT BUTTON (every tab)
 # ==========================================
-with tab2:
-    st.header("Decision Trace")
-    st.caption("One check-in, end to end: the event, the features looked up for the shopper, every promotion "
-               "scored, the live rules, and the payload sent to the app and pin-pad.")
-
-    featured = data.table("featured_events")
-    f1, f2 = st.columns([2, 1])
-    pick = f1.selectbox("Pick a check-in", featured.display.tolist())
-    typed = f2.text_input("…or an event ID from the live stream", placeholder="from the decision stream")
-    event_id = int(featured.set_index("display").at[pick, "event_id"])
-    if typed.strip():
-        try:
-            event_id = int(typed.strip().lstrip("#"))
-        except ValueError:
-            st.error("Event IDs are numbers.")
-    ev, sc, pr = data.event_bundle(event_id)
-
-    if ev is None:
-        st.warning(f"No event {event_id}.")
-    else:
-        e = ev.iloc[0]
-        prof = pr.iloc[0] if len(pr) else None
-        dec, cand, ms = run_decision(e, sc, pr if len(pr) else pd.DataFrame({"member_id": [e.member_id],
-                                                                              "marketing_opt_in": [False]}))
-
-        s1, s2, s3 = st.columns([1, 1, 1.1])
-        with s1:
-            st.subheader("1. Event in")
-            st.json({"event_id": int(e.event_id), "ts": f"{e.event_ts:%Y-%m-%d %H:%M}",
-                     "member_id": int(e.member_id), "store_id": int(e.store_id), "trigger": e.trigger,
-                     "daypart": e.daypart, "first_scan": e.first_scan_label,
-                     "days_since_prev_visit": int(e.days_since_prev_visit),
-                     "store_has_fresh_bakery": bool(e.store_has_fresh_bakery)}, expanded=True)
-        with s2:
-            st.subheader("2. Features looked up")
-            if prof is not None:
-                st.markdown(
-                    f"- **{shopper_name(prof)}**, {prof.crm_segment}, {prof.tenure_months} months\n"
-                    f"- {prof.visits_per_active_week:.1f} visits per active week, avg basket "
-                    f"${prof.avg_basket_value:.2f}\n"
-                    f"- Coffee on {pct(prof.coffee_rate)} of visits; pastry on "
-                    f"{pct(prof.pastry_with_coffee_rate)} of coffee visits\n"
-                    f"- Visit mix: {pct(prof.morning_share)} morning · {pct(prof.midday_share)} midday · "
-                    f"{pct(prof.afternoon_share)} afternoon · {pct(prof.late_night_share)} late night\n"
-                    f"- {'App user' if prof.app_user else 'No app'} · "
-                    f"{'opted in' if prof.marketing_opt_in else 'not opted in'}")
-            st.caption("From `member_features`, published to the online feature store. The endpoint reads them "
-                       "by `member_id` in milliseconds; the caller sends only the check-in.")
-        with s3:
-            st.subheader("3. Offer sent")
-            st.markdown(offer_card(dec, prof, e.event_ts), unsafe_allow_html=True)
-
-        st.subheader("4. Every promotion scored for this moment")
-        cv = cand.copy()
-        cv["Promotion"] = cv.promotion_id.map(PROMOS.short_name)
-        cv["Live rule"] = cv.context_rule + np.where(cv.context_ok, " (met)", " (not met)")
-        cv["Decision"] = np.select(
-            [cv.promotion_id.eq(dec.promotion_id) & (dec.decision == "Offer served"),
-             cv.promotion_id.eq(dec.promotion_id) & dec.holdout,
-             ~cv.eligible, ~cv.context_ok, cv.tier != "Persuadable"],
-            ["Sent", "Holdout: logged, not shown", "Not eligible", "Doesn't fit this moment",
-             "Suppressed (" + cv.tier + ")"], default="Lower margin than winner")
-        for col in ["p_with_offer", "p_without_offer", "uplift"]:
-            cv[col] = cv[col] * 100
-        st.dataframe(
-            cv.sort_values("expected_net_margin", ascending=False)[
-                ["Promotion", "Live rule", "p_without_offer", "p_with_offer", "uplift", "expected_net_margin",
-                 "tier", "Decision"]],
-            column_config={
-                "p_with_offer": st.column_config.ProgressColumn("Buys with offer", format="%.0f%%", min_value=0,
-                                                                max_value=100),
-                "p_without_offer": st.column_config.NumberColumn("Buys without", format="%.0f%%"),
-                "uplift": st.column_config.NumberColumn("Lift", format="%.0f pts"),
-                "expected_net_margin": st.column_config.NumberColumn("Net margin", format="dollar"),
-                "tier": "Model tier",
-            },
-            hide_index=True, width="stretch")
-        st.info(f"**Decision:** {dec.decision}. {dec.reason}.")
-        sdec, sms, served_by, req, resp = serve_decision(e, sc, pr if len(pr) else
-                                                         pd.DataFrame({"member_id": [e.member_id],
-                                                                       "marketing_opt_in": [False]}))
-        r1, r2 = st.columns(2)
-        with r1:
-            st.markdown(f"**Request to the decision service** ({served_by})")
-            st.json({"dataframe_records": [req]}, expanded=True)
-        with r2:
-            st.markdown(f"**Response** · {sms:.0f} ms round trip")
-            st.json({k: (v.item() if hasattr(v, "item") else v) for k, v in (resp or {}).items()}, expanded=True)
-        st.caption("The endpoint looks up the shopper's features online by `member_id`, scores both response "
-                   "models for every promotion, and applies the live rules in `nbo_decision.py`: the same code the "
-                   "streaming job and this table use.")
-
-
-# ==========================================
-# 3. UNDER THE HOOD
-# ==========================================
-with tab3:
-    st.header("Under the Hood")
-    st.caption("The hard parts: streaming in-store signals, serving features with low latency, scoring models in "
-               "milliseconds, and governing all of it on Databricks.")
-
-    st.graphviz_chart("""
-digraph {
-  rankdir=LR; node [shape=box, style="rounded,filled", fillcolor="#F4F6F7", fontname="Helvetica", fontsize=11];
-  edge [fontname="Helvetica", fontsize=9, color="#888"];
-  app [label="7-Eleven app\\nshared location:\\nentered store"]; pos [label="POS pin-pad\\nloyalty ID scan"];
-  zb [label="Zerobus ingest", fillcolor="#FFE8D6"];
-  bronze [label="instore_events\\n(Delta, streaming)"];
-  sdp [label="Lakeflow job\\nmember_features", fillcolor="#FFE8D6"];
-  online [label="Online feature store\\n(Lakebase, CONTINUOUS sync)", fillcolor="#FFE8D6"];
-  ml [label="MLflow + UC registry\\nnbo_decision_service @prod", fillcolor="#FFE8D6"];
-  ep [label="Model Serving endpoint\\nnbo-decision\\nlookup + score + rules", fillcolor="#D5F5E3"];
-  push [label="Push notification\\n+ pin-pad offer", fillcolor="#D5F5E3"];
-  inf [label="Inference table\\nnbo_decision_payload"];
-  dash [label="AI/BI dashboard\\n+ Genie"];
-  uc [label="Unity Catalog: lineage, row filters,\\nPII masks, endpoint permissions", shape=note, fillcolor="#EBF5FB"];
-  app -> ep [label="check-in (REST)"]; pos -> ep; app -> zb; pos -> zb; zb -> bronze;
-  bronze -> sdp [label="stream"]; sdp -> online; online -> ep [label="key lookup"];
-  ml -> ep [label="serves"]; ep -> push [label="offer"]; ep -> inf; inf -> dash; bronze -> dash;
-  inf -> ml [label="retrain on holdout"];
-}""", width="stretch")
-
-    st.subheader("Latency budget: check-in to offer on screen")
-    budget = pd.DataFrame([
-        {"Step": "Check-in reaches the endpoint (app or pin-pad → REST)", "Target": "< 100 ms", "Runs on": "Model Serving"},
-        {"Step": "Feature lookup by member_id", "Target": "< 10 ms", "Runs on": "Online feature store (Lakebase)"},
-        {"Step": "Score 2 response models × 5 promotions", "Target": "< 30 ms", "Runs on": "nbo_decision_service"},
-        {"Step": "Live rules + arbitration + 10% holdout", "Target": "< 5 ms", "Runs on": "nbo_decision.py"},
-        {"Step": "Push notification and pin-pad offer", "Target": "< 300 ms", "Runs on": "Push service / POS API"},
-        {"Step": "Request + response logged", "Target": "async", "Runs on": "Inference table (AI Gateway)"},
-        {"Step": "Check-in event streamed to Delta", "Target": "seconds", "Runs on": "Zerobus → instore_events"},
-    ])
-    st.dataframe(budget, hide_index=True, width="stretch")
-    log = pd.DataFrame(st.session_state.get("live_log", []))
-    if len(log):
-        st.caption(f"Measured in this app session: {len(log):,} decisions, round trip p50 "
-                   f"{np.percentile(log.latency_ms, 50):.0f} ms, p95 {np.percentile(log.latency_ms, 95):.0f} ms "
-                   f"({data.endpoint_label()}).")
-
-    st.subheader("Tables behind the decision path")
-    objs = [
-        ("instore_events", "Bronze", "Check-in stream: member, store, trigger, daypart, first item scanned"),
-        ("pos_baskets", "Bronze", "12 months of POS baskets with category flags"),
-        ("offer_history", "Bronze", "Every in-store offer Jan–Sep 2026, with its 10% holdout"),
-        ("member_features", "Silver / online", "Visit mix, category rates, recency per member; published online"),
-        ("member_offer_scores", "Gold", "Member × promotion: buys with and without offer, lift, net margin, tier (nightly)"),
-        ("offer_decisions", "Gold", "One decision per check-in, written by the streaming decision job"),
-        ("nbo_decision_payload", "Gold", "Every request and response to the nbo-decision endpoint"),
-        ("live_decision_log", "Gold", "Decisions made from this app"),
-        ("tier_backtest", "Gold", "Measured lift by model tier on the holdout"),
-    ]
-    counts = data.table_counts(tuple(o[0] for o in objs))
-    st.dataframe(pd.DataFrame([{"Table": n, "Layer": l, "Rows": counts.get(n), "What it holds": d}
-                               for n, l, d in objs]),
-                 column_config={"Rows": st.column_config.NumberColumn(format="%d")},
-                 hide_index=True, width="stretch")
-    st.caption("Governance: regional analysts see only their region's rows (row filter on `region`); first name, "
-               "last name, and email are masked unless you are in `nbo_pii_readers`. The app runs as its own "
-               "service principal with the same rules.")
-
-
-# ==========================================
-# 4. DOES THE MODEL WORK?
-# ==========================================
-with tab4:
-    st.header("Does the Model Work?")
-    st.caption("Every in-store offer holds back 10% of shoppers. Comparing the two groups shows what each offer "
-               "really caused, and whether the model's tiers hold up.")
-
-    bt = data.table("tier_backtest")
-    bt = bt.merge(PROMOS[["short_name"]], left_on="promotion_id", right_index=True)
-    bt = bt[bt.holdout_sends >= 30]
-    st.subheader("Measured lift by model tier, Apr–Sep in-store offers")
-    chart = alt.Chart(bt).mark_bar().encode(
-        x=alt.X("tier:N", title=None, sort=BACKTEST_TIERS),
-        y=alt.Y("measured_uplift:Q", title="Offer minus holdout conversion", axis=alt.Axis(format="%")),
-        color=alt.Color("tier:N", legend=None,
-                        scale=alt.Scale(domain=BACKTEST_TIERS, range=["#008060", "#9AA5A8", "#FF6600", "#C0392B"])),
-        column=alt.Column("short_name:N", title=None),
-        tooltip=["short_name", "tier", alt.Tooltip("measured_uplift:Q", format=".1%"),
-                 alt.Tooltip("treatment_sends:Q", format=","), alt.Tooltip("holdout_sends:Q", format=",")],
-    ).properties(width=150, height=220)
-    st.altair_chart(chart)
-    st.caption("Shoppers the model calls Persuadable buy far more when they get the offer. Sure Things buy the "
-               "same either way, so the decision path suppresses them.")
-
-    st.subheader("Why a model and not static rules")
-    monthly = data.table("promo_monthly")
-    monthly["month_end"] = pd.to_datetime(monthly.month_end)
-    monthly["month_end"] = monthly.month_end.dt.to_period("M").dt.start_time  # plot each month at its start
-    trend = (monthly.groupby("month_end")[["discount_cost", "incremental_margin"]].sum().reset_index()
-             .melt("month_end", var_name="measure", value_name="usd"))
-    trend["measure"] = trend.measure.map({"discount_cost": "Discount spend",
-                                          "incremental_margin": "Incremental margin (vs holdout)"})
-    lines = alt.Chart(trend).mark_line(point=True).encode(
-        x=alt.X("month_end:T", title=None, axis=alt.Axis(format="%b %Y", tickCount={"interval": "month", "step": 1})),
-        y=alt.Y("usd:Q", title="USD"),
-        color=alt.Color("measure:N", title=None, scale=alt.Scale(range=["#FF6600", "#008060"]),
-                        legend=alt.Legend(orient="bottom")),
-        tooltip=[alt.Tooltip("month_end:T", format="%b %Y"), "measure", alt.Tooltip("usd:Q", format="$,.0f")],
-    )
-    pre = monthly[monthly.month_end < "2026-04-01"].month_end.max()
-    post = monthly[monthly.month_end >= "2026-04-01"].month_end.min()
-    change_x = pre + (post - pre) / 2
-    rule = alt.Chart(pd.DataFrame({"x": [change_x]})).mark_rule(strokeDash=[4, 4], color="#888").encode(x="x:T")
-    label = alt.Chart(pd.DataFrame({"x": [change_x], "t": ["Apr 1: static rules, every eligible offer"]})).mark_text(
-        align="right", dx=-6, dy=6, color="#666").encode(x="x:T", y=alt.value(0), text="t")
-    zero = alt.Chart(pd.DataFrame({"y": [0]})).mark_rule(color="#ccc").encode(y="y:Q")
-    st.altair_chart((zero + lines + rule + label).properties(height=260), width="stretch")
-
-    pf = data.table("promo_portfolio")
-    view = pf[["short_name", "eligible_members", "persuadable_members", "redemption_rate_apr_sep",
-               "measured_uplift_apr_sep", "blast_net_margin_per_send", "targeted_net_margin_per_send"]].copy()
-    view["redemption_rate_apr_sep"] *= 100
-    view["measured_uplift_apr_sep"] *= 100
-    st.dataframe(
-        view,
-        column_config={
-            "short_name": "Promotion",
-            "eligible_members": st.column_config.NumberColumn("Eligible shoppers", format="%d"),
-            "persuadable_members": st.column_config.NumberColumn("Persuadable", format="%d"),
-            "redemption_rate_apr_sep": st.column_config.NumberColumn("Redemption rate", format="%.0f%%"),
-            "measured_uplift_apr_sep": st.column_config.NumberColumn("Measured lift", format="%.1f pts"),
-            "blast_net_margin_per_send": st.column_config.NumberColumn("Net margin / month: static rules",
-                                                                       format="dollar"),
-            "targeted_net_margin_per_send": st.column_config.NumberColumn("Net margin / month: model",
-                                                                          format="dollar"),
-        },
-        hide_index=True, width="stretch")
-    hero = pf.set_index("promotion_id").loc["PR01"]
-    st.info(f"Static rules show Coffee + Croissant to every eligible morning shopper: "
-            f"{pct(hero.redemptions_that_would_happen_anyway)} of redemptions would have happened anyway and it "
-            f"loses {money(-hero.blast_net_margin_per_send)} a month on the pilot. Scored per shopper in real time, "
-            f"it earns {money(hero.targeted_net_margin_per_send)}. Across all offers that is "
-            f"{money(pf.annual_gain_vs_blast.sum())} a year on 25,000 members, scaling with members.")
-
-# ==========================================
-# SCREEN 5: ASK GENIE
-# ==========================================
-with tab5:
-    st.header("Ask Genie")
-    st.caption("Plain-English questions over the same governed metric view, decision tables, and inference table the "
-               "dashboard reads.")
-
-    if not data.genie_enabled():
-        st.info("Genie isn't connected to this app yet. Set `GENIE_SPACE_ID` in app.yaml to turn this on. "
-                "On a local preview, ask in the Genie space in the workspace instead.")
-    else:
-        examples = [
-            "How many check-ins got an offer today, and why did the rest not?",
-            "Which offers did we push, by daypart?",
-            "What is the endpoint's p95 latency?",
-            "Does the model's tiering hold up against the holdout?",
-        ]
-        q_pick = st.selectbox("Example questions", ["Type your own", *examples])
-        question = st.text_input("Question", value="" if q_pick == "Type your own" else q_pick)
-        if st.button("Ask", type="primary", disabled=not question.strip()):
-            with st.spinner("Genie is working..."):
-                try:
-                    answer = data.ask_genie(question.strip())
-                except Exception as e:  # surface the reason instead of a stack trace
-                    st.error(f"Genie request failed: {str(e).splitlines()[0]}")
-                    answer = None
-            if answer:
-                for text in answer["texts"]:
-                    st.markdown(text)
-                for res in answer["queries"]:
-                    if res.get("description"):
-                        st.markdown(f"**{res['description']}**")
-                    if res.get("frame") is not None:
-                        st.dataframe(res["frame"], hide_index=True, width="stretch")
-                    if res.get("sql"):
-                        with st.expander("SQL Genie ran"):
-                            st.code(res["sql"], language="sql")
+with st.container(key="agent_fab"):
+    if st.button("Ask the agent", icon=":material/forum:", type="primary"):
+        agent_chat()

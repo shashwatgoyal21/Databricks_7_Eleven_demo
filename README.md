@@ -1,39 +1,82 @@
-# Next Best Offer demo: build kit
+# Real-Time Next Best Offer demo: build kit
 
-Builds the synthetic loyalty data, uplift model, gold tables, metric view, access rules, and the Next Best Offer app for the convenience-retail promotions demo. The dashboard and Genie space are assembled in the UI from the files in `dashboard/` and `genie/`. All members, stores, and numbers are fictional.
+## What this is
+
+While a shopper is in the store, the system picks the promotion most likely to get that person to add to their basket and sends it to them right then. A data and AI engineering audience also fits that use case. They care about the hard parts: streaming in-store signals, serving features with low latency, scoring models in milliseconds and governing all of it on Databricks.
+
+The shopper shares their location with the app once. When they walk into a store, the app sends an *entered store* check-in with their loyalty ID to a Model Serving endpoint. The endpoint looks up their features from the online feature store, scores an uplift model for every promotion, applies the live rules (daypart, what is already scanned, store inventory, days since last visit), and returns one offer, or none, as a push notification and on the pin-pad. Every request is logged to an inference table for the AI/BI dashboard and for retraining. All shoppers, stores, and numbers are fictional.
 
 ## What gets built
 
 | Object | Type | Purpose |
 | --- | --- | --- |
 | `stores` | Table | 120 stores across Texas, California, Florida, Northeast |
-| `loyalty_members` | Table | Members, region, CRM segment, opt-ins (names and email masked) |
+| `loyalty_members` | Table | Shoppers, region, segment, app and offer opt-ins (names and email masked) |
 | `pos_baskets` | Table | ~3.3M POS baskets, Oct 2025 → Sep 2026, with category flags |
-| `promotions` | Table | The five promotions with discount cost and unit margin |
-| `offer_history` | Table | Every 2026 send with Treatment / Holdout group and conversion |
-| `member_features` | Table | Silver: visit mix, category rates, recency per member |
+| `promotions` | Table | The five in-store promotions with discount cost and unit margin |
+| `offer_history` | Table | Every in-store offer Jan–Sep 2026, with its 10% holdout and conversion |
+| `instore_events` | Table | The live day's check-in stream (2026-09-30): shopper, store, trigger, daypart, first item scanned, days since last visit |
+| `member_features` | Feature table | Visit mix, category rates, recency per shopper; primary key `member_id`, published to the online store |
 | `nbo_uplift_model` | Registered model | Two response models per promotion (with offer, without offer) |
-| `member_offer_scores` | Table | Member × promotion: likelihood with and without offer, lift, net margin, tier, next best offer |
-| `member_profile` | Table | Member behaviour and next best offer, for the customer view |
-| `promo_monthly` | Table | Gold: month × promotion × region sends, redemptions, holdout, spend, incremental margin |
-| `promo_portfolio`, `audience_tiers`, `tier_backtest`, `featured_members` | Tables | Gold tables read by the app |
-| `metrics_promotions` | Metric view | Governed KPIs read by the dashboard and Genie |
-| `loyalty_region_filter` | Function | Row filter by marketing region |
-| `loyalty_pii_mask` | Function | Names and email visible only to `loyalty_pii` |
-| `campaign_approvals` | Table | Written by the app's Approve button |
-| `nbo-decision-engine` | Databricks App | The marketer-facing app |
+| `nbo_decision_service` | Registered model | Pyfunc: feature lookup + uplift scoring + live rules + arbitration + holdout, `@prod` |
+| `nbo-decision` | Model Serving endpoint | Real-time decision per check-in, with an AI Gateway inference table |
+| `nbo_decision_payload` | Inference table | Every request and response to the endpoint |
+| `member_offer_scores` | Table | Shopper × promotion scores from the nightly batch, used by the trace view |
+| `offer_decisions` | Table | One decision per check-in, written by the streaming decision job |
+| `live_decision_log` | Table | Decisions made from the app |
+| `promo_monthly`, `promo_portfolio`, `audience_tiers`, `tier_backtest`, `featured_events`, `member_profile` | Tables | Gold tables for the app, dashboard, and Genie |
+| `metrics_promotions` | Metric view | Governed offer KPIs read by the dashboard and Genie |
+| `nbo_region_filter` | Function | Row filter by region |
+| `nbo_pii_mask` | Function | Names and email visible only to `nbo_pii_readers` |
+| `nbo-decision-engine` | Databricks App | Live in-store view: share location, walk in, offer pushed |
+
+Shared code: `app/nbo_decision.py` is the decision path. The endpoint, the streaming job, and the app all import it, so a rule changes in one place.
+
+## How the 7-Eleven app calls it
+
+The retailer's app already knows when a shopper who shared location is at a store. It makes one HTTPS call:
+
+```bash
+curl -X POST "$DATABRICKS_HOST/serving-endpoints/nbo-decision/invocations" \
+  -H "Authorization: Bearer $TOKEN" -H "Content-Type: application/json" \
+  -d '{"dataframe_records": [{"member_id": 7110022051, "store_id": 1074, "event_ts": "2026-09-30 06:51:00",
+                              "first_scan": "", "days_since_prev_visit": -1}]}'
+```
+
+Only `member_id`, `store_id`, and `event_ts` are required. `first_scan` (empty if unknown) and `days_since_prev_visit` (-1 if unknown) are optional. The endpoint looks up everything else itself.
+
+The response carries `decision` (Offer / No offer / Holdout), `promotion_id`, `offer_message`, `push_title`, `channel`, `reason`, `expected_net_margin`, and `event_id`. The caller passes `push_title` and `offer_message` to its existing push service. In production the call comes from the app backend with a service principal token, not from the phone.
+
+## Push delivery
+
+The decision service does not send notifications. Delivery stays with the push stack the retailer already runs. `app/push.py` turns the decision into a request for that stack, and the demo app uses it to send real pushes:
+
+| `NBO_PUSH_PROVIDER` | `NBO_PUSH_URL` | Also set |
+| --- | --- | --- |
+| `ntfy` (demo) | `https://ntfy.sh/<your topic>` | nothing |
+| `webhook` | Their app backend or push gateway | nothing; receives the APNs-shaped JSON |
+| `braze` | Their Braze REST endpoint | `NBO_PUSH_API_KEY` |
+| `airship` | optional | `NBO_PUSH_API_KEY` |
+| `onesignal` | optional | `NBO_PUSH_API_KEY`, `NBO_PUSH_APP_ID` |
+
+Keep keys in a Databricks secret scope and map them in `app/app.yaml` with `valueFrom`. Then turn on **Send real pushes** in the app sidebar.
+
+To get a real notification on your own phone during the demo:
+
+1. Install the free **ntfy** app on the phone and subscribe to a topic name only you know, for example `nbo-demo-<random>`.
+2. In `app/app.yaml`, set `NBO_PUSH_PROVIDER: ntfy` and `NBO_PUSH_URL: https://ntfy.sh/nbo-demo-<random>`, then redeploy.
+3. In the app, turn on **Send real pushes** and click **Next shopper walks in**. Offers arrive on the phone within a second.
 
 ## Prerequisites
 
-- A Unity Catalog workspace with serverless jobs, or a cluster on DBR 15.4 LTS or later.
+- A Unity Catalog workspace with serverless jobs, or a cluster on DBR 15.4 LTS ML or later.
+- Model Serving and Lakebase-backed online feature stores enabled.
 - A Pro or Serverless SQL warehouse for the app, dashboard, and Genie.
-- Databricks Apps enabled in the workspace.
-- Account groups: `loyalty_leadership`, `marketing_texas`, `marketing_california`, `marketing_florida`, `marketing_northeast`, `loyalty_pii`.
-- Add yourself to `loyalty_leadership`, or you'll see no rows after step 4.
+- Databricks Apps enabled.
+- Account groups: `nbo_platform`, `nbo_region_texas`, `nbo_region_california`, `nbo_region_florida`, `nbo_region_northeast`, `nbo_pii_readers`.
+- Add yourself to `nbo_platform` and `nbo_pii_readers`, or you'll see no rows and masked names after the governance step.
 
 ## Run it
-
-With the Databricks CLI:
 
 ```bash
 databricks bundle deploy -t dev --var="catalog=workspace" --var="schema=nbo_demo" --var="warehouse_id=<warehouse id>"
@@ -41,53 +84,55 @@ databricks bundle run -t dev nbo_demo_build
 databricks bundle run -t dev nbo_app
 ```
 
-If you change the catalog or schema, also change `NBO_SCHEMA` in `app/app.yaml`.
-
-Without the CLI: import the four notebooks and `nbo_lib.py` from `src/` into one workspace folder, set the `catalog` and `schema` widgets, and run the notebooks in order. Then create an app from `app/` in **Compute > Apps** and attach the SQL warehouse as a resource named `sql-warehouse`.
+Deploy creates the app before the job runs, so notebook 06 can grant the app's service principal `CAN_QUERY` on the endpoint. If you change the catalog, schema, or endpoint name, also change `NBO_SCHEMA` and `NBO_ENDPOINT` in `app/app.yaml`.
 
 | Step | Notebook | What it does |
 | --- | --- | --- |
-| 1 | `01_generate_data.py` | Simulates Oct 2025 → Sep 2026 and writes the raw tables (about 3 minutes) |
-| 2 | `02_train_and_score.py` | Builds features, trains and registers the uplift model, scores members, writes gold |
+| 1 | `01_generate_data.py` | Simulates Oct 2025 → Sep 2026 and writes the raw tables, including `instore_events` (about 3 minutes) |
+| 2 | `02_train_and_score.py` | Builds features, trains and registers the uplift model, saves the learners, scores shoppers, writes gold |
 | 3 | `03_validate_story.py` | Checks the story numbers and prints PASS or CHECK for each |
-| 4 | `04_governance.py` | Creates the metric view, row filter, PII mask, approvals table, and grants |
+| 5 | `05_stream_decisions.py` | Structured Streaming over `instore_events`: runs the decision path per micro-batch, writes `offer_decisions` |
+| 6 | `06_serve_decisions.py` | Feature table + online store, logs `nbo_decision_service` with feature lookups, creates the `nbo-decision` endpoint with an inference table, grants the app, sends one test check-in |
+| 4 | `04_governance.py` | Metric view, row filter, PII mask, `live_decision_log`, and grants |
 
-Rerunning the job rebuilds everything except `campaign_approvals`.
+The job runs them in the order above. Rerunning rebuilds everything except `live_decision_log`. On a rerun, `member_features` is recreated; if the online table stops syncing, delete `member_features_online` in Catalog Explorer and rerun step 6.
+
+For production, point check-ins at Zerobus (or Kafka) so they land in `instore_events` continuously, and drop the `availableNow` trigger in step 5.
 
 ## Finish in the UI
 
-1. **Give the app access.** Find the app's service principal on its page in **Compute > Apps**. Add it to `loyalty_leadership`, then:
+1. **App access.** Notebook 06 grants the app `CAN_QUERY` on the endpoint. Also add the app's service principal to `nbo_platform`, then:
    ```sql
    GRANT USE CATALOG ON CATALOG workspace TO `<app service principal>`;
    GRANT USE SCHEMA, SELECT ON SCHEMA workspace.nbo_demo TO `<app service principal>`;
-   GRANT MODIFY ON TABLE workspace.nbo_demo.campaign_approvals TO `<app service principal>`;
+   GRANT MODIFY ON TABLE workspace.nbo_demo.live_decision_log TO `<app service principal>`;
    ```
-2. Build the dashboard from `dashboard/datasets.sql` and `dashboard/layout.md`, about 20 minutes.
-3. Create the Genie space from `genie/genie_space.md`, about 10 minutes.
-4. Test governance: sign in as a user who is only in `marketing_texas`. The dashboard and Genie should show Texas only, and `SELECT email FROM loyalty_members` should return `***`.
+2. Click through the app once so `nbo_decision_payload` has rows, then import `dashboard/nbo_promotions.lvdash.json` (Dashboards > Create > Import), or build it by hand from `dashboard/datasets.sql` and `dashboard/layout.md`. The datasets use `workspace.nbo_demo`; edit them if you deployed elsewhere.
+3. Create the Genie space from `genie/genie_space.md`, about 10 minutes, then put its ID in `GENIE_SPACE_ID` in `app/app.yaml` and redeploy the app to turn on the Ask Genie tab.
+4. Test governance: sign in as a user who is only in `nbo_region_texas`. The dashboard and Genie should show Texas only, and `SELECT email FROM loyalty_members` should return `***`.
 
 ## Preview locally, no workspace
 
 ```bash
-pip install pandas numpy scikit-learn pyarrow streamlit altair
-python local_run.py                      # builds the same tables into .local_data/ in ~15s
+pip install pandas numpy scikit-learn==1.5.2 pyarrow streamlit altair
+python local_run.py                      # builds the same tables into .local_data/ in ~20s
 NBO_LOCAL_DATA=.local_data streamlit run app/app.py
 ```
 
-`src/nbo_lib.py` holds the simulation, features, model, and gold logic, so the local preview and the notebooks run the same code.
+Locally the app runs an in-process copy of the decision service (same learners, same `nbo_decision.py`) instead of calling the endpoint, and says so on screen.
 
 ## Numbers the data is built to produce
 
-25,000 members, seed 711. Step 3 prints the actual values.
+25,000 shoppers, seed 711. Step 3 prints the actual values.
 
 | Metric | Target |
 | --- | --- |
-| Monthly discount spend | ~$2.0K Jan–Mar → ~$8.3K Apr–Sep (about 3×) |
-| Monthly incremental margin | ~+$500 Jan–Mar → ~−$2.3K Apr–Sep |
-| Coffee + Croissant redemption rate, Apr–Sep | ~38% |
-| Coffee + Croissant redemptions that would happen anyway | ~67% |
-| Coffee + Croissant net margin per send | all eligible ~−$1.1K, propensity-ranked ~−$1.5K, uplift-targeted ~+$700 |
-| Measured lift, Persuadable vs Sure Thing (Coffee + Croissant) | ~+22 pts vs ~0 pts |
-| Late-Night Energy $1 Off | No audience pays back → retire or redesign |
-
-Dollar values scale linearly with members. Raise the `members` variable for bigger numbers; 100,000 takes roughly four times as long.
+| Live-day check-ins | ~8,300 across 120 stores (~70 per store) |
+| Check-ins that get an offer pushed | ~18% |
+| Check-ins suppressed because no offer moves the shopper or fits the moment | ~80% |
+| Measured lift, Persuadable vs Sure Thing (Coffee + Croissant holdout) | ~+22 pts vs ~0 pts |
+| Static rules from Apr 1: monthly discount spend | ~$2.0K Jan–Mar → ~$8.3K Apr–Sep |
+| Static rules from Apr 1: monthly incremental margin | ~+$500 → ~−$2.3K |
+| Coffee + Croissant redemptions that would happen anyway under static rules | ~67% |
+| Coffee + Croissant net margin per month | Static rules ~−$1.1K · model ~+$700 |
+| Annual gain, model vs static rules | ~$44K on 25,000 shoppers, scaling linearly with shoppers |

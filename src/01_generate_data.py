@@ -1,16 +1,17 @@
 # Databricks notebook source
 # MAGIC %md
-# MAGIC # 01 · Generate synthetic loyalty data
+# MAGIC # 01 · Generate synthetic in-store data
 # MAGIC
-# MAGIC Simulates a fictional convenience-retail loyalty program from October 2025 to September 2026
-# MAGIC and writes the raw tables: stores, loyalty members, POS baskets, the promotion catalog, and
-# MAGIC every offer sent in 2026 with its 10% holdout.
+# MAGIC Simulates a fictional convenience retailer's stores and loyalty shoppers from October 2025 to
+# MAGIC September 2026 and writes the raw (bronze) tables: stores, loyalty members, POS baskets, the
+# MAGIC promotion catalog, every in-store offer served in 2026 with its 10% holdout, and
+# MAGIC `instore_events`: the check-in stream for the live day (2026-09-30) that the real-time decision
+# MAGIC path scores.
 # MAGIC
-# MAGIC The story is built into the simulation: until March, marketers sent offers to small curated
-# MAGIC segments. On 2026-04-01 every offer started going to everyone eligible. Discount spend tripled,
-# MAGIC but incremental margin fell, because most new recipients already buy the promoted item. The
-# MAGIC clearest case is the Coffee + Croissant bundle: about 40% of morning commuters already add a
-# MAGIC pastry to most coffee visits.
+# MAGIC History built in: Jan-Mar in-store offers ran as a curated pilot. From 2026-04-01 a static rules
+# MAGIC engine showed every eligible offer at every check-in. Discount spend tripled and incremental
+# MAGIC margin went negative, because most shoppers who got an offer already buy the promoted item.
+# MAGIC That holdout data is what the uplift model learns from.
 
 # COMMAND ----------
 
@@ -32,6 +33,7 @@ sys.path.insert(0, os.getcwd())
 import nbo_lib  # noqa: E402
 
 raw = nbo_lib.simulate(members=members)
+raw["instore_events"] = nbo_lib.instore_events(raw)
 for name, df in raw.items():
     print(f"{name}: {len(df):,} rows")
 

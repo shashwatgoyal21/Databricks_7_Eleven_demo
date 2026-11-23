@@ -20,11 +20,20 @@ out.mkdir(exist_ok=True)
 
 t0 = time.time()
 raw, gold = nbo_lib.run_all(members)
+# The learners and online features the decision endpoint uses, so the app can run it in-process
+import pickle  # noqa: E402
+
+train_f, score_f = nbo_lib.feature_windows(raw["pos_baskets"], raw["loyalty_members"])
+models = nbo_lib.train_uplift(raw["offer_history"], train_f)
+with open(out / "uplift_learners.pkl", "wb") as fh:
+    pickle.dump({pid: {"treated": m["treated"], "control": m["control"]} for pid, m in models.items()}, fh)
+score_f.to_parquet(out / "member_features.parquet", index=False)
 print(f"Built in {time.time() - t0:.0f}s: {len(raw['pos_baskets']):,} baskets, "
       f"{len(raw['offer_history']):,} offer events")
 
 # The tables the app reads
-for name, df in {"promotions": raw["promotions"], **gold}.items():
+for name, df in {"promotions": raw["promotions"], "stores": raw["stores"],
+                 "instore_events": raw["instore_events"], **gold}.items():
     df.to_parquet(out / f"{name}.parquet", index=False)
 
 nbo_lib.story_checks(nbo_lib.story_numbers(gold["promo_monthly"], gold["promo_portfolio"], gold["tier_backtest"]))
@@ -35,4 +44,6 @@ print(gold["promo_portfolio"][["short_name", "eligible_members", "persuadable_me
 print()
 print(gold["tier_backtest"].round(3).to_string())
 print()
-print(gold["featured_members"].to_string())
+print(gold["offer_decisions"].decision.value_counts().to_string())
+print()
+print(gold["featured_events"].to_string())

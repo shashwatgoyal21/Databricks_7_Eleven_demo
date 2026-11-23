@@ -41,10 +41,8 @@ ORDER BY month_end
 # COMMAND ----------
 
 display(spark.sql(f"""
-SELECT f.display, s.promotion_id, s.tier, ROUND(s.p_without_offer, 2) AS p_without_offer,
-       ROUND(s.p_with_offer, 2) AS p_with_offer, s.is_next_best_offer, s.reason
-FROM {fq}.featured_members f
-JOIN {fq}.member_offer_scores s USING (member_id)
-WHERE s.eligible
-ORDER BY f.display, s.expected_net_margin DESC
+SELECT f.display, e.trigger, e.daypart, e.first_scan_label, e.days_since_prev_visit
+FROM {fq}.featured_events f
+JOIN {fq}.instore_events e USING (event_id)
+ORDER BY e.event_ts
 """))

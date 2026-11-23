@@ -99,6 +99,7 @@ except Exception as e:
 
 import mlflow
 import pandas as pd
+from mlflow.models import infer_signature
 from mlflow.tracking import MlflowClient
 
 from serving_model import RESPONSE_COLS, NBODecisionService
@@ -160,6 +161,8 @@ with mlflow.start_run(run_name="nbo-decision-service"):
         artifacts={"learners": learners},
         code_paths=[os.path.join(APP_DIR, "nbo_decision.py"), os.path.join(APP_DIR, "serving_model.py")],
         pip_requirements=["scikit-learn==1.5.2", "pandas", "numpy"],
+        # Unity Catalog requires an output schema; inputs come from the training set.
+        output_schema=infer_signature(example, example_out).outputs,
     )
 
 client = MlflowClient(registry_uri="databricks-uc")

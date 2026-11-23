@@ -162,6 +162,30 @@ def render_agent_tab():
             for n in b["not_working"]:
                 st.markdown(f":red[**{n['title']}.**] {n['detail']}")
 
+    t = agent.cfo_table()
+    if not t.empty:
+        st.subheader(f"Return vs the {agent.HURDLE:.1%} hurdle")
+        st.caption("After discounts and Databricks compute, by promotion, annualized from the measured period. "
+                   "Cost per decision is the serving cost of one check-in, from system.billing.")
+        st.dataframe(t, hide_index=True, width="stretch", column_config={
+            "Acceptance": st.column_config.NumberColumn(format="percent"),
+            "Incremental margin / yr": st.column_config.NumberColumn(format="dollar"),
+            "Discounts / yr": st.column_config.NumberColumn(format="dollar"),
+            "Compute / yr": st.column_config.NumberColumn(format="dollar"),
+            "Net return / yr": st.column_config.NumberColumn(format="dollar"),
+            "Cost per decision": st.column_config.NumberColumn(format="$%.5f"),
+            "Return on spend": st.column_config.NumberColumn(format="percent"),
+            "Clears hurdle": st.column_config.CheckboxColumn()})
+        d1, d2, _ = st.columns([1.3, 1.6, 3])
+        if d1.download_button("Download finance report", agent.cfo_report_html(b, t),
+                              file_name="offer-engine-finance-report.html", mime="text/html",
+                              icon=":material/description:", type="primary", width="stretch"):
+            agent.record_activity("report", "Downloaded finance report")
+        if d2.download_button("Export for EPM (Anaplan, Jedox)", agent.epm_export_csv(),
+                              file_name="offer-engine-actuals.csv", mime="text/csv",
+                              icon=":material/upload_file:", width="stretch"):
+            agent.record_activity("export", "Exported actuals for EPM")
+
     st.subheader("Recommendations")
     st.caption("Ranked by monthly margin. Changing an offer needs your approval; that comes in the next release.")
     for i, r in enumerate(b["recs"], 1):

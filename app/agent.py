@@ -19,6 +19,7 @@ import streamlit as st
 import data
 
 AGENT_NAME = "NBO Offer Agent"
+HURDLE = float(os.getenv("NBO_HURDLE_RATE", "0.101"))  # return each offer must clear, set by finance
 
 
 # ---------------------------------------------------------------------------
@@ -278,3 +279,88 @@ def record_activity(kind, content, routed=""):
     data.append_rows("agent_activity", [{
         "activity_id": str(uuid.uuid4()), "activity_type": kind, "content": content[:2000], "routed_to": routed,
         "user_name": data.current_user(), "created_at": _now()}])
+
+
+# ---------------------------------------------------------------------------
+# CFO view: return after discounts and compute vs the hurdle, report and EPM export
+# ---------------------------------------------------------------------------
+
+def cfo_table():
+    """One row per promotion: return vs hurdle and cost per decision. Promotion level only."""
+    p = data.table("offer_performance")
+    if p.empty:
+        return pd.DataFrame()
+    names = data.table("promotions").set_index("promotion_id").short_name
+    days = max(p.decision_date.nunique(), 1)
+    g = p.groupby("promotion_id")[["offers_served", "holdout_checkins", "delivered", "accepted",
+                                   "incremental_margin", "discount_cost", "compute_cost_usd", "net_return"]].sum()
+    spend = g.discount_cost + g.compute_cost_usd
+    out = pd.DataFrame({
+        "Promotion": g.index.map(names),
+        "Acceptance": g.accepted / g.delivered.where(g.delivered > 0),
+        "Incremental margin / yr": g.incremental_margin * 365 / days,
+        "Discounts / yr": g.discount_cost * 365 / days,
+        "Compute / yr": g.compute_cost_usd * 365 / days,
+        "Net return / yr": g.net_return * 365 / days,
+        "Cost per decision": g.compute_cost_usd / (g.offers_served + g.holdout_checkins).clip(lower=1),
+        "Return on spend": g.net_return / spend.where(spend > 0),
+    })
+    out["Clears hurdle"] = out["Return on spend"] >= HURDLE
+    return out.sort_values("Net return / yr", ascending=False).reset_index(drop=True)
+
+
+def cfo_report_html(b, t):
+    """A one-page report for finance sign-off, in the Databricks brand system."""
+    import html as h
+    perf = b.get("perf") or {}
+    above = int(t["Clears hurdle"].sum()) if not t.empty else 0
+    rows = "".join(
+        f"<tr><td>{h.escape(str(r.Promotion))}</td><td>{r.Acceptance:.0%}</td>"
+        f"<td>{money(r['Net return / yr'], True)}</td><td>{r['Return on spend']:.0%}</td>"
+        f"<td>${r['Cost per decision']:.5f}</td><td class='{'ok' if r['Clears hurdle'] else 'no'}'>"
+        f"{'Yes' if r['Clears hurdle'] else 'No'}</td></tr>" for _, r in t.iterrows())
+    recs = "".join(f"<li><b>{h.escape(r['title'])}.</b> {h.escape(r['why'])} Expected "
+                   f"{money(r['impact'], True)} a month.</li>" for r in b["recs"])
+    total = float(t["Net return / yr"].sum()) if not t.empty else 0.0
+    return f"""<!doctype html><html><head><meta charset="utf-8"><title>Offer engine: finance report</title>
+<link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=DM+Mono&display=swap" rel="stylesheet">
+<style>body{{font-family:'DM Sans',sans-serif;background:#F9F7F4;color:#0B2026;max-width:900px;margin:40px auto;padding:0 24px}}
+h1{{font-size:28px;margin:0;border-bottom:3px solid #FF3621;padding-bottom:8px}}h2{{font-size:18px;margin-top:28px}}
+.kpis{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:20px}}
+.k{{background:#fff;border:1px solid #DBD7CE;border-radius:8px;padding:12px}}.k b{{display:block;font-size:22px}}
+.k span{{font-size:12px;color:#4A5E68}}table{{width:100%;border-collapse:collapse;background:#fff;font-size:14px}}
+th,td{{text-align:left;padding:8px;border-bottom:1px solid #EEEDE9}}th{{background:#1B3139;color:#fff;font-weight:500}}
+.ok{{color:#00A972;font-weight:700}}.no{{color:#970F29;font-weight:700}}.note{{font-size:12px;color:#4A5E68}}
+code{{font-family:'DM Mono',monospace}}</style></head><body>
+<h1>In-store offer engine: finance report</h1>
+<p class="note">Generated {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC from Unity Catalog (<code>offer_performance</code>,
+<code>compute_cost</code>, <code>agent_proposals</code>). Promotion-level results only.</p>
+<div class="kpis">
+<div class="k"><span>Net return a year, after discounts and compute</span><b>{money(total, True)}</b></div>
+<div class="k"><span>Return on spend vs {HURDLE:.1%} hurdle</span><b>{perf.get("return_on_spend", 0):.0%}</b></div>
+<div class="k"><span>Promotions clearing the hurdle</span><b>{above} of {len(t)}</b></div>
+<div class="k"><span>Compute cost per decision</span><b>${perf.get("cost_per_decision", 0):.5f}</b></div></div>
+<h2>Return by promotion</h2><table><tr><th>Promotion</th><th>Acceptance</th><th>Net return / yr</th>
+<th>Return on spend</th><th>Cost per decision</th><th>Clears {HURDLE:.1%}</th></tr>{rows}</table>
+<h2>Recommended changes, for approval</h2><ol>{recs}</ol>
+<p class="note">Method: incremental margin = redemption rate when the offer is shown minus the rate in the 10% holdout,
+times offers served, times unit margin. Net return = incremental margin - discounts - Databricks serving compute
+(from system.billing). Return on spend = net return / (discounts + compute). Annualized from the measured period.</p>
+</body></html>"""
+
+
+def epm_export_csv():
+    """Long-format actuals for Anaplan or Jedox: period, version, promotion, region, daypart, line item, value."""
+    p = data.table("offer_performance")
+    if p.empty:
+        return ""
+    items = {"offers_served": "Offers Served", "accepted": "Offers Accepted", "redeemed": "Offers Redeemed",
+             "incremental_margin": "Incremental Margin", "discount_cost": "Discount Cost",
+             "compute_cost_usd": "Compute Cost", "net_return": "Net Return"}
+    long = p.melt(id_vars=["decision_date", "promotion_id", "region", "daypart"], value_vars=list(items),
+                  var_name="line_item", value_name="value")
+    long["line_item"] = long.line_item.map(items)
+    long.insert(0, "version", "Actual")
+    long["period"] = pd.to_datetime(long.pop("decision_date")).dt.strftime("%Y-%m-%d")
+    long["value"] = long.value.astype(float).round(4)
+    return long[["period", "version", "promotion_id", "region", "daypart", "line_item", "value"]].to_csv(index=False)

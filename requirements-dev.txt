@@ -1,0 +1,13 @@
+# Test dependencies: pip install -r requirements-dev.txt && pytest
+pytest
+pandas
+numpy
+pyarrow
+scikit-learn
+mlflow-skinny
+databricks-sdk
+databricks-sql-connector
+streamlit
+altair
+sqlglot
+pyyaml

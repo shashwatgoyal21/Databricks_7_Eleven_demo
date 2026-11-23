@@ -7,7 +7,7 @@
 # MAGIC - Column mask: shopper names and emails are visible only to `nbo_pii_readers`.
 # MAGIC - `live_decision_log`: written by the app for every decision it makes. Kept across reruns.
 # MAGIC
-# MAGIC Account groups used: `nbo_platform`, `nbo_region_texas`, `nbo_region_california`,
+# MAGIC Groups used (account or workspace groups): `nbo_platform`, `nbo_region_texas`, `nbo_region_california`,
 # MAGIC `nbo_region_florida`, `nbo_region_northeast`, `nbo_pii_readers`. Add yourself and the app's
 # MAGIC service principal to `nbo_platform`, or you will see no rows.
 
@@ -80,17 +80,21 @@ $$
 
 # COMMAND ----------
 
-region_clauses = "\n    ".join(f"OR (region = '{r}' AND is_account_group_member('{g}'))"
-                               for r, g in REGION_GROUPS.items())
+def in_group(g):
+    """Account group or workspace-local group, so the demo works in workspaces without account groups."""
+    return f"(is_account_group_member('{g}') OR is_member('{g}'))"
+
+
+region_clauses = "\n    ".join(f"OR (region = '{r}' AND {in_group(g)})" for r, g in REGION_GROUPS.items())
 spark.sql(f"""
 CREATE OR REPLACE FUNCTION {fq}.nbo_region_filter(region STRING)
-RETURN is_account_group_member('nbo_platform')
+RETURN {in_group('nbo_platform')}
     {region_clauses}
 """)
 
 spark.sql(f"""
 CREATE OR REPLACE FUNCTION {fq}.nbo_pii_mask(value STRING)
-RETURN CASE WHEN is_account_group_member('nbo_pii_readers') THEN value ELSE '***' END
+RETURN CASE WHEN {in_group('nbo_pii_readers')} THEN value ELSE '***' END
 """)
 
 for table in ["loyalty_members", "member_features", "member_profile", "member_offer_scores", "offer_history",

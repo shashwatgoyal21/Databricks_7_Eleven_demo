@@ -367,3 +367,65 @@ def epm_export_csv():
     long.insert(0, "period", f"FY{datetime.now(timezone.utc):%Y}")
     long["value"] = long.value.astype(float).round(4)
     return long.to_csv(index=False)
+
+
+# ---------------------------------------------------------------------------
+# Approvals and the AI/BI dashboard
+# ---------------------------------------------------------------------------
+
+def _proposal_id(r):
+    return f"{datetime.now(timezone.utc):%Y-%m-%d}-{r['promotion_id']}-{r['kind']}"
+
+
+def proposal_status(r):
+    """proposed, approved or rejected. Session first, then agent_proposals."""
+    pid = _proposal_id(r)
+    decided = st.session_state.setdefault("_decisions", {})
+    if pid in decided:
+        return decided[pid]
+    if not data.LOCAL:
+        try:
+            rows = data._query(f"SELECT status FROM {data.SCHEMA}.agent_proposals WHERE proposal_id = :p "
+                               f"ORDER BY created_at DESC LIMIT 1", {"p": pid})
+            if not rows.empty and rows.status.iloc[0]:
+                return rows.status.iloc[0]
+        except Exception:
+            pass
+    return "proposed"
+
+
+def decide_proposal(r, status):
+    """Record the decision in agent_proposals and, if approved, the change in promotion_changes."""
+    pid, now, user = _proposal_id(r), _now(), data.current_user()
+    st.session_state.setdefault("_decisions", {})[pid] = status
+    if not data.LOCAL:
+        try:
+            data._query(f"UPDATE {data.SCHEMA}.agent_proposals SET status = :s, decided_by = :u, "
+                        f"decided_at = CAST(:t AS TIMESTAMP) WHERE proposal_id = :p",
+                        {"s": status, "u": user, "t": now, "p": pid})
+        except Exception as e:
+            st.toast(f"Approval write skipped: {str(e).splitlines()[0][:120]}")
+    if status == "approved":
+        data.append_rows("promotion_changes", [{
+            "change_id": str(uuid.uuid4()), "promotion_id": r["promotion_id"], "change_type": r["kind"],
+            "field": None, "old_value": None, "new_value": r["title"], "reason": r["why"],
+            "source": "agent, approved", "changed_by": user, "changed_at": now}])
+    record_activity("approval", f"{status}: {r['title']}")
+
+
+@st.cache_data(ttl=600)
+def dashboard_urls():
+    """(open URL, embed URL) of the published AI/BI dashboard, found by name. Empty strings if not found."""
+    name = os.getenv("NBO_DASHBOARD_NAME", "NBO Offer Engine")
+    if data.LOCAL:
+        return "", ""
+    try:
+        w = data._workspace()
+        host = w.config.host.rstrip("/")
+        for d in w.lakeview.list():
+            if name.lower() in (d.display_name or "").lower():
+                return (f"{host}/dashboardsv3/{d.dashboard_id}/published",
+                        f"{host}/embed/dashboardsv3/{d.dashboard_id}")
+    except Exception:
+        pass
+    return "", ""

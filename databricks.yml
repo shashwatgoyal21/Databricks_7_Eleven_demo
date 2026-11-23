@@ -93,6 +93,15 @@ resources:
               app_name: nbo-decision-engine
               genie_space_id: ""
 
+  dashboards:
+    nbo_dashboard:
+      display_name: NBO Offer Engine
+      file_path: ./dashboard/nbo_promotions.lvdash.json
+      warehouse_id: ${var.warehouse_id}
+      permissions:
+        - group_name: users
+          level: CAN_READ
+
   apps:
     nbo_app:
       name: nbo-decision-engine

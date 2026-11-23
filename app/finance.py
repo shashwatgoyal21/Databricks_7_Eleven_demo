@@ -10,6 +10,8 @@ import streamlit as st
 
 import data
 
+MIN_OFFERS = 100  # offers served before a program's ROIC is shown; fewer is too noisy to call
+
 DEFAULTS = {
     # key: (value, unit, description)
     "network_stores": (13000, "stores", "Stores the offer engine would run in. Results are scaled from the pilot "
@@ -66,6 +68,7 @@ def network_pnl(by="promotion_id"):
                        "discount_cost", "compute_cost_usd"]].sum()
     decisions = g.offers_served + g.holdout_checkins
     t = pd.DataFrame(index=g.index)
+    t["offers_served"] = g.offers_served
     t["acceptance_rate"] = g.accepted / g.delivered.where(g.delivered > 0)
     t["incremental_margin"] = g.incremental_margin * (1 - a["cannibalization_rate"]) * k
     t["incremental_sales"] = t.incremental_margin / a["promoted_item_gross_margin"]
@@ -78,6 +81,7 @@ def network_pnl(by="promotion_id"):
     t["roic"] = t.operating_profit / t.capital.where(t.capital > 0)
     t["cost_per_decision"] = g.compute_cost_usd / decisions.clip(lower=1)
     t["clears_hurdle"] = t.roic >= a["hurdle_rate"]
+    t["enough_data"] = g.offers_served >= MIN_OFFERS
     s = t[["incremental_sales", "incremental_margin", "discount_cost", "compute_cost", "platform_cost",
            "gross_profit_after_discount", "operating_profit", "capital"]].sum()
     total = s.to_dict()

@@ -193,7 +193,7 @@ if endpoint_name in existing:
 else:
     w.serving_endpoints.create_and_wait(
         name=endpoint_name,
-        config=EndpointCoreConfigInput(served_entities=[entity]),
+        config=EndpointCoreConfigInput(name=endpoint_name, served_entities=[entity]),
         ai_gateway=AiGatewayConfig(inference_table_config=AiGatewayInferenceTableConfig(
             catalog_name=catalog, schema_name=schema, table_name_prefix="nbo_decision", enabled=True)),
     )

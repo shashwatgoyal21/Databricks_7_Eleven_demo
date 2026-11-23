@@ -17,6 +17,7 @@ import pandas as pd
 import streamlit as st
 
 import data
+import finance
 
 AGENT_NAME = "NBO Offer Agent"
 HURDLE = float(os.getenv("NBO_HURDLE_RATE", "0.101"))  # return each offer must clear, set by finance
@@ -27,8 +28,11 @@ HURDLE = float(os.getenv("NBO_HURDLE_RATE", "0.101"))  # return each offer must 
 # ---------------------------------------------------------------------------
 
 def money(x, signed=False):
+    """$12.4M, $310K, $950: the scale finance reads at."""
     sign = "+" if signed and x > 0 else ("−" if x < 0 else "")
-    return f"{sign}${abs(x):,.0f}"
+    a = abs(x)
+    body = f"{a / 1e9:.2f}B" if a >= 1e9 else f"{a / 1e6:.1f}M" if a >= 1e6 else f"{a / 1e3:.0f}K" if a >= 1e3 else f"{a:,.0f}"
+    return f"{sign}${body}"
 
 
 @st.cache_data(ttl=600)
@@ -73,11 +77,16 @@ def performance():
 def briefing():
     """Everything the Agent tab shows, as plain data."""
     pf = data.table("promo_portfolio").copy()
+    # promo_portfolio is per month for the pilot stores: scale to the network, per year
+    n_stores, _ = finance.pilot_scope()
+    k = finance.assumptions()["network_stores"] / n_stores * 12
+    for c in ("targeted_net_margin_per_send", "blast_net_margin_per_send"):
+        pf[c] = pf[c] * k
     bt = data.table("tier_backtest")
     promos = data.table("promotions").set_index("promotion_id")
 
-    model_month = float(pf.targeted_net_margin_per_send.sum())
-    rules_month = float(pf.blast_net_margin_per_send.sum())
+    model_year = float(pf.targeted_net_margin_per_send.sum())
+    rules_year = float(pf.blast_net_margin_per_send.sum())
 
     lift = {}
     for tier in ("Persuadable", "Sure Thing"):
@@ -93,7 +102,7 @@ def briefing():
             not_working.append({
                 "title": f"{name} doesn't pay back for any shopper group",
                 "detail": f"Measured lift is {r.measured_uplift_apr_sep * 100:+.1f} pts. At the current discount "
-                          f"the best audience still nets {money(r.targeted_net_margin_per_send)} a month.",
+                          f"the best audience still nets {money(r.targeted_net_margin_per_send)} a year.",
             })
             recs.append({
                 "promotion_id": r.promotion_id,
@@ -101,21 +110,21 @@ def briefing():
                 "kind": "Stop or switch",
                 "title": f"Retire {name}, or switch it to a cheaper incentive",
                 "why": f"No shopper group pays back at the current discount. Static rules lose "
-                       f"{money(-r.blast_net_margin_per_send)} a month on it.",
+                       f"{money(-r.blast_net_margin_per_send)} a year on it.",
                 "impact": -r.blast_net_margin_per_send,
                 "ask": f"What would happen to margin if we replaced {name} with a points offer instead of a discount?",
             })
         else:
             gain = r.targeted_net_margin_per_send - r.blast_net_margin_per_send
             working.append({
-                "title": f"{name} earns {money(r.targeted_net_margin_per_send)} a month when the model targets it",
+                "title": f"{name} earns {money(r.targeted_net_margin_per_send)} a year when the model targets it",
                 "detail": f"Measured lift {r.measured_uplift_apr_sep * 100:+.1f} pts. "
                           f"{r.persuadable_members / max(r.eligible_members, 1):.0%} of eligible shoppers are "
                           f"persuadable.",
             })
             if r.blast_net_margin_per_send < 0:
                 not_working.append({
-                    "title": f"Sent to everyone, {name} loses {money(-r.blast_net_margin_per_send)} a month",
+                    "title": f"Sent to everyone, {name} loses {money(-r.blast_net_margin_per_send)} a year",
                     "detail": f"{anyway:.0%} of its redemptions would have happened without the offer.",
                 })
             recs.append({
@@ -124,7 +133,7 @@ def briefing():
                 "kind": "Scale" if r.blast_net_margin_per_send >= 0 else "Retarget",
                 "title": (f"Scale {name} to more persuadable shoppers" if r.blast_net_margin_per_send >= 0
                           else f"Send {name} only to shoppers it changes"),
-                "why": f"Targeted by the model it nets {money(r.targeted_net_margin_per_send)} a month, "
+                "why": f"Targeted by the model it nets {money(r.targeted_net_margin_per_send)} a year, "
                        f"vs {money(r.blast_net_margin_per_send)} sent to everyone eligible.",
                 "impact": gain,
                 "ask": f"Which shopper segments and times of day drive the return on {name}?",
@@ -132,8 +141,8 @@ def briefing():
     recs.sort(key=lambda x: -x["rank_value"])
 
     return {
-        "model_month": model_month,
-        "rules_month": rules_month,
+        "model_year": model_year,
+        "rules_year": rules_year,
         "lift": lift,
         "mix": decision_mix(),
         "perf": performance(),
@@ -217,7 +226,7 @@ def _local_answer(question):
         return "Here's what isn't working:\n\n" + "\n".join(lines)
     if any(k in q for k in ("recommend", "should", "next", "do")):
         lines = [f"{i}. **{r['title']}.** {r['why']}" for i, r in enumerate(b["recs"][:3], 1)]
-        return "My top recommendations, ranked by monthly margin:\n\n" + "\n".join(lines)
+        return "My top recommendations, ranked by yearly margin:\n\n" + "\n".join(lines)
     lines = [f"- **{w['title']}.** {w['detail']}" for w in b["working"]]
     return ("Local preview: the chat answers from the briefing. On Databricks it goes to the supervisor and "
             "the Genie space.\n\nWhat's working:\n\n" + "\n".join(lines))
@@ -270,7 +279,7 @@ def record_proposals(recs):
     data.append_rows("agent_proposals", [{
         "proposal_id": f"{today}-{r['promotion_id']}-{r['kind']}", "proposal_date": today,
         "promotion_id": r["promotion_id"], "kind": r["kind"], "title": r["title"], "rationale": r["why"],
-        "expected_monthly_impact_usd": float(r["impact"]), "status": "proposed", "decided_by": None,
+        "expected_monthly_impact_usd": float(r["impact"]) / 12, "status": "proposed", "decided_by": None,
         "decided_at": None, "created_at": now} for r in recs])
 
 
@@ -281,86 +290,80 @@ def record_activity(kind, content, routed=""):
         "user_name": data.current_user(), "created_at": _now()}])
 
 
+
 # ---------------------------------------------------------------------------
-# CFO view: return after discounts and compute vs the hurdle, report and EPM export
+# Finance view: top line, bottom line and ROIC vs the hurdle; report and EPM export
 # ---------------------------------------------------------------------------
 
-def cfo_table():
-    """One row per promotion: return vs hurdle and cost per decision. Promotion level only."""
-    p = data.table("offer_performance")
-    if p.empty:
-        return pd.DataFrame()
+def finance_table():
+    t, total = finance.network_pnl()
+    if t.empty:
+        return t, total
     names = data.table("promotions").set_index("promotion_id").short_name
-    days = max(p.decision_date.nunique(), 1)
-    g = p.groupby("promotion_id")[["offers_served", "holdout_checkins", "delivered", "accepted",
-                                   "incremental_margin", "discount_cost", "compute_cost_usd", "net_return"]].sum()
-    spend = g.discount_cost + g.compute_cost_usd
     out = pd.DataFrame({
-        "Promotion": g.index.map(names),
-        "Acceptance": g.accepted / g.delivered.where(g.delivered > 0),
-        "Incremental margin / yr": g.incremental_margin * 365 / days,
-        "Discounts / yr": g.discount_cost * 365 / days,
-        "Compute / yr": g.compute_cost_usd * 365 / days,
-        "Net return / yr": g.net_return * 365 / days,
-        "Cost per decision": g.compute_cost_usd / (g.offers_served + g.holdout_checkins).clip(lower=1),
-        "Return on spend": g.net_return / spend.where(spend > 0),
+        "Promotion": t.promotion_id.map(names),
+        "Acceptance": t.acceptance_rate,
+        "Incremental sales ($M/yr)": t.incremental_sales / 1e6,
+        "Gross profit after discount ($M/yr)": t.gross_profit_after_discount / 1e6,
+        "Compute + platform ($M/yr)": (t.compute_cost + t.platform_cost) / 1e6,
+        "Operating profit ($M/yr)": t.operating_profit / 1e6,
+        "ROIC": t.roic,
+        "Clears hurdle": t.clears_hurdle,
     })
-    out["Clears hurdle"] = out["Return on spend"] >= HURDLE
-    return out.sort_values("Net return / yr", ascending=False).reset_index(drop=True)
+    return out.sort_values("ROIC", ascending=False).reset_index(drop=True), total
 
 
-def cfo_report_html(b, t):
-    """A one-page report for finance sign-off, in the Databricks brand system."""
+def finance_report_html(b, t, total):
+    """One-page report for CFO sign-off, in the Databricks brand system."""
     import html as h
-    perf = b.get("perf") or {}
-    above = int(t["Clears hurdle"].sum()) if not t.empty else 0
+    a = finance.assumptions()
     rows = "".join(
-        f"<tr><td>{h.escape(str(r.Promotion))}</td><td>{r.Acceptance:.0%}</td>"
-        f"<td>{money(r['Net return / yr'], True)}</td><td>{r['Return on spend']:.0%}</td>"
-        f"<td>${r['Cost per decision']:.5f}</td><td class='{'ok' if r['Clears hurdle'] else 'no'}'>"
-        f"{'Yes' if r['Clears hurdle'] else 'No'}</td></tr>" for _, r in t.iterrows())
-    recs = "".join(f"<li><b>{h.escape(r['title'])}.</b> {h.escape(r['why'])} Expected "
-                   f"{money(r['impact'], True)} a month.</li>" for r in b["recs"])
-    total = float(t["Net return / yr"].sum()) if not t.empty else 0.0
+        f"<tr><td>{h.escape(str(r.Promotion))}</td><td>{money(r['Incremental sales ($M/yr)'] * 1e6)}</td>"
+        f"<td>{money(r['Operating profit ($M/yr)'] * 1e6, True)}</td><td>{r.ROIC:.1%}</td>"
+        f"<td class='{'ok' if r['Clears hurdle'] else 'no'}'>{'Yes' if r['Clears hurdle'] else 'No'}</td></tr>"
+        for _, r in t.iterrows())
+    recs = "".join(f"<li><b>{h.escape(r['title'])}.</b> {h.escape(r['why'])}</li>" for r in b["recs"])
+    assump = "".join(f"<tr><td>{h.escape(k)}</td><td>{a[k]:,.3g}</td><td>{h.escape(v[2])}</td></tr>"
+                     for k, v in finance.DEFAULTS.items())
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>Offer engine: finance report</title>
 <link href="https://fonts.googleapis.com/css2?family=DM+Sans:wght@400;500;700&family=DM+Mono&display=swap" rel="stylesheet">
-<style>body{{font-family:'DM Sans',sans-serif;background:#F9F7F4;color:#0B2026;max-width:900px;margin:40px auto;padding:0 24px}}
+<style>body{{font-family:'DM Sans',sans-serif;background:#F9F7F4;color:#0B2026;max-width:920px;margin:40px auto;padding:0 24px}}
 h1{{font-size:28px;margin:0;border-bottom:3px solid #FF3621;padding-bottom:8px}}h2{{font-size:18px;margin-top:28px}}
 .kpis{{display:grid;grid-template-columns:repeat(4,1fr);gap:12px;margin-top:20px}}
 .k{{background:#fff;border:1px solid #DBD7CE;border-radius:8px;padding:12px}}.k b{{display:block;font-size:22px}}
 .k span{{font-size:12px;color:#4A5E68}}table{{width:100%;border-collapse:collapse;background:#fff;font-size:14px}}
-th,td{{text-align:left;padding:8px;border-bottom:1px solid #EEEDE9}}th{{background:#1B3139;color:#fff;font-weight:500}}
+th,td{{text-align:left;padding:8px;border-bottom:1px solid #EEEDE9;vertical-align:top}}th{{background:#1B3139;color:#fff;font-weight:500}}
 .ok{{color:#00A972;font-weight:700}}.no{{color:#970F29;font-weight:700}}.note{{font-size:12px;color:#4A5E68}}
 code{{font-family:'DM Mono',monospace}}</style></head><body>
 <h1>In-store offer engine: finance report</h1>
-<p class="note">Generated {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC from Unity Catalog (<code>offer_performance</code>,
-<code>compute_cost</code>, <code>agent_proposals</code>). Promotion-level results only.</p>
+<p class="note">Generated {datetime.now(timezone.utc):%Y-%m-%d %H:%M} UTC from Unity Catalog. Measured in the pilot stores,
+scaled to {total['network_stores']:,.0f} stores, per year. Promotion-level results only.</p>
 <div class="kpis">
-<div class="k"><span>Net return a year, after discounts and compute</span><b>{money(total, True)}</b></div>
-<div class="k"><span>Return on spend vs {HURDLE:.1%} hurdle</span><b>{perf.get("return_on_spend", 0):.0%}</b></div>
-<div class="k"><span>Promotions clearing the hurdle</span><b>{above} of {len(t)}</b></div>
-<div class="k"><span>Compute cost per decision</span><b>${perf.get("cost_per_decision", 0):.5f}</b></div></div>
-<h2>Return by promotion</h2><table><tr><th>Promotion</th><th>Acceptance</th><th>Net return / yr</th>
-<th>Return on spend</th><th>Cost per decision</th><th>Clears {HURDLE:.1%}</th></tr>{rows}</table>
+<div class="k"><span>Top line: incremental sales a year</span><b>{money(total['incremental_sales'])}</b></div>
+<div class="k"><span>Bottom line: operating profit impact a year</span><b>{money(total['operating_profit'], True)}</b></div>
+<div class="k"><span>ROIC vs {total['hurdle_rate']:.1%} hurdle</span><b>{total['roic']:.1%}</b></div>
+<div class="k"><span>Databricks compute per decision</span><b>${total['cost_per_decision']:.5f}</b></div></div>
+<h2>By promotion</h2><table><tr><th>Promotion</th><th>Incremental sales / yr</th><th>Operating profit / yr</th>
+<th>ROIC</th><th>Clears hurdle</th></tr>{rows}</table>
 <h2>Recommended changes, for approval</h2><ol>{recs}</ol>
-<p class="note">Method: incremental margin = redemption rate when the offer is shown minus the rate in the 10% holdout,
-times offers served, times unit margin. Net return = incremental margin - discounts - Databricks serving compute
-(from system.billing). Return on spend = net return / (discounts + compute). Annualized from the measured period.</p>
-</body></html>"""
+<h2>Assumptions (finance_assumptions table)</h2><table><tr><th>Key</th><th>Value</th><th>Meaning</th></tr>{assump}</table>
+<p class="note">Incremental margin = (redemption rate when shown - rate in the 10% holdout) x offers served x unit margin,
+less cannibalization. Incremental sales = incremental margin / gross margin rate. Operating profit impact = incremental
+margin - discounts - Databricks compute (system.billing) - platform cost. ROIC = operating profit impact / capital deployed
+(discounts + compute + platform cost).</p></body></html>"""
 
 
 def epm_export_csv():
-    """Long-format actuals for Anaplan or Jedox: period, version, promotion, region, daypart, line item, value."""
-    p = data.table("offer_performance")
-    if p.empty:
+    """Long-format annual network actuals for Anaplan or Jedox: version, promotion, line item, value."""
+    t, _ = finance.network_pnl()
+    if t.empty:
         return ""
-    items = {"offers_served": "Offers Served", "accepted": "Offers Accepted", "redeemed": "Offers Redeemed",
-             "incremental_margin": "Incremental Margin", "discount_cost": "Discount Cost",
-             "compute_cost_usd": "Compute Cost", "net_return": "Net Return"}
-    long = p.melt(id_vars=["decision_date", "promotion_id", "region", "daypart"], value_vars=list(items),
-                  var_name="line_item", value_name="value")
+    items = {"incremental_sales": "Incremental Sales", "incremental_margin": "Incremental Gross Margin",
+             "discount_cost": "Discount Cost", "compute_cost": "Databricks Compute", "platform_cost": "Platform Cost",
+             "operating_profit": "Operating Profit Impact", "capital": "Capital Deployed", "roic": "ROIC"}
+    long = t.melt(id_vars=["promotion_id"], value_vars=list(items), var_name="line_item", value_name="value")
     long["line_item"] = long.line_item.map(items)
-    long.insert(0, "version", "Actual")
-    long["period"] = pd.to_datetime(long.pop("decision_date")).dt.strftime("%Y-%m-%d")
+    long.insert(0, "version", "Actual, annualized")
+    long.insert(0, "period", f"FY{datetime.now(timezone.utc):%Y}")
     long["value"] = long.value.astype(float).round(4)
-    return long[["period", "version", "promotion_id", "region", "daypart", "line_item", "value"]].to_csv(index=False)
+    return long.to_csv(index=False)

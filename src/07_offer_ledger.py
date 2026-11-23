@@ -118,6 +118,26 @@ spark.sql(f"""CREATE TABLE IF NOT EXISTS {fq}.agent_activity (
 
 # COMMAND ----------
 
+# MAGIC %md ## Finance assumptions (owned by finance, edit in Catalog Explorer or SQL)
+
+# COMMAND ----------
+
+sys.path.insert(0, os.path.join(os.getcwd(), "..", "app"))
+from finance import DEFAULTS  # noqa: E402
+
+spark.sql(f"""CREATE TABLE IF NOT EXISTS {fq}.finance_assumptions (
+  key STRING, value DOUBLE, unit STRING, description STRING, updated_by STRING, updated_at TIMESTAMP)
+  COMMENT 'Assumptions the app uses to scale pilot results to the network and compute ROIC. Edit to change.'""")
+existing = {r.key for r in spark.table(f"{fq}.finance_assumptions").select("key").collect()}
+new = [(k, float(v[0]), v[1], v[2]) for k, v in DEFAULTS.items() if k not in existing]
+if new:
+    (spark.createDataFrame(new, "key STRING, value DOUBLE, unit STRING, description STRING")
+     .selectExpr("*", "current_user() AS updated_by", "current_timestamp() AS updated_at")
+     .write.mode("append").saveAsTable(f"{fq}.finance_assumptions"))
+display(spark.table(f"{fq}.finance_assumptions"))
+
+# COMMAND ----------
+
 # MAGIC %md ## Governance: same region row filter, and write access for the app
 
 # COMMAND ----------

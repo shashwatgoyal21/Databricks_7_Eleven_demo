@@ -126,79 +126,59 @@ with st.sidebar:
                "are synthetic.")
 
 def render_agent_tab():
-    """Agent briefing: what's working, what isn't, and what to do next. Promotion level only."""
+    """Executive home: top line, bottom line, ROIC vs hurdle, and the changes the agent recommends."""
     b = agent.briefing()
-    st.header("Offer agent")
-    st.caption("The decision endpoint runs on every check-in in the background. The agent watches the results "
-               "against the 10% holdout, tells you what's working and what isn't, and recommends what to change. "
-               "Ask it anything with the button in the corner.")
+    ft, fin = agent.finance_table()
+    perf = b["perf"] or {}
 
-    mix, lift, perf = b["mix"], b["lift"], b["perf"]
-    k1, k2, k3, k4 = st.columns(4)
-    k1.metric("Net margin a month, model targeting", agent.money(b["model_month"]),
-              f"{agent.money(b['model_month'] - b['rules_month'], True)} vs static rules")
-    if perf:
-        k2.metric("Acceptance rate", f"{perf['acceptance_rate']:.0%}",
-                  f"{perf['redemption_rate']:.0%} redeemed vs {perf['holdout_rate']:.0%} in holdout", delta_color="off")
-        k3.metric("Return on spend", f"{perf['return_on_spend']:.0%}",
-                  f"{agent.money(perf['net_return'], True)} net after discounts and compute", delta_color="off",
-                  help=f"Net return / (discounts + compute). Compute is ${perf['cost_per_decision']:.5f} a decision.")
-    k4.metric("Model check: measured lift", f"{lift['Persuadable'] * 100:+.0f} pts",
-              f"{lift['Sure Thing'] * 100:+.0f} pts for shoppers it skips", delta_color="off")
-    if mix:
-        st.caption(f"Today: {mix['served']:.0%} of check-ins got an offer, {mix['no_offer']:.0%} needed none, "
-                   f"{mix['holdout']:.0%} were held back to measure. Every decision and outcome is stored in "
-                   f"Unity Catalog (`offer_outcomes`, `offer_performance`).")
-
-    left, right = st.columns(2)
-    with left:
-        with st.container(border=True):
-            st.subheader("What's working")
-            for w in b["working"]:
-                st.markdown(f":green[**{w['title']}.**] {w['detail']}")
-    with right:
-        with st.container(border=True):
-            st.subheader("What isn't")
-            for n in b["not_working"]:
-                st.markdown(f":red[**{n['title']}.**] {n['detail']}")
-
-    t = agent.cfo_table()
-    if not t.empty:
-        st.subheader(f"Return vs the {agent.HURDLE:.1%} hurdle")
-        st.caption("After discounts and Databricks compute, by promotion, annualized from the measured period. "
-                   "Cost per decision is the serving cost of one check-in, from system.billing.")
-        st.dataframe(t, hide_index=True, width="stretch", column_config={
-            "Acceptance": st.column_config.NumberColumn(format="percent"),
-            "Incremental margin / yr": st.column_config.NumberColumn(format="dollar"),
-            "Discounts / yr": st.column_config.NumberColumn(format="dollar"),
-            "Compute / yr": st.column_config.NumberColumn(format="dollar"),
-            "Net return / yr": st.column_config.NumberColumn(format="dollar"),
-            "Cost per decision": st.column_config.NumberColumn(format="$%.5f"),
-            "Return on spend": st.column_config.NumberColumn(format="percent"),
-            "Clears hurdle": st.column_config.CheckboxColumn()})
-        d1, d2, _ = st.columns([1.3, 1.6, 3])
-        if d1.download_button("Download finance report", agent.cfo_report_html(b, t),
+    h1, h2, h3 = st.columns([4, 1.1, 1.1], vertical_alignment="bottom")
+    h1.header("Offer engine performance")
+    h1.caption(f"Annual, {fin.get('network_stores', 0):,.0f} stores. Measured against a 10% holdout.")
+    if fin:
+        if h2.download_button("Finance report", agent.finance_report_html(b, ft, fin),
                               file_name="offer-engine-finance-report.html", mime="text/html",
-                              icon=":material/description:", type="primary", width="stretch"):
+                              icon=":material/description:", width="stretch"):
             agent.record_activity("report", "Downloaded finance report")
-        if d2.download_button("Export for EPM (Anaplan, Jedox)", agent.epm_export_csv(),
-                              file_name="offer-engine-actuals.csv", mime="text/csv",
-                              icon=":material/upload_file:", width="stretch"):
+        if h3.download_button("Export to EPM", agent.epm_export_csv(), file_name="offer-engine-actuals.csv",
+                              mime="text/csv", icon=":material/upload_file:", width="stretch",
+                              help="Long-format actuals for Anaplan or Jedox"):
             agent.record_activity("export", "Exported actuals for EPM")
 
-    st.subheader("Recommendations")
-    st.caption("Ranked by monthly margin. Changing an offer needs your approval; that comes in the next release.")
-    for i, r in enumerate(b["recs"], 1):
+    if fin:
+        k1, k2, k3, k4 = st.columns(4)
+        with k1.container(border=True):
+            st.metric("Incremental sales (top line)", agent.money(fin["incremental_sales"]))
+        with k2.container(border=True):
+            st.metric("Operating profit (bottom line)", agent.money(fin["operating_profit"], True))
+        with k3.container(border=True):
+            st.metric("ROIC", f"{fin['roic']:.1%}", f"{(fin['roic'] - fin['hurdle_rate']) * 100:+.1f} pts vs "
+                      f"{fin['hurdle_rate']:.1%} hurdle")
+        with k4.container(border=True):
+            st.metric("Databricks compute per decision", f"${fin['cost_per_decision']:.5f}")
+
+    st.subheader("Actions for approval")
+    for i, r in enumerate(b["recs"][:3], 1):
         with st.container(border=True):
-            c1, c2, c3 = st.columns([4, 1.2, 1.1], vertical_alignment="center")
-            color = "red" if r["kind"] == "Stop or switch" else ("orange" if r["kind"] == "Retarget" else "green")
-            c1.markdown(f"**{i}. {r['title']}**  \n:{color}[{r['kind']}] · {r['why']}")
-            c2.metric("Margin a month", agent.money(r["impact"], True), label_visibility="visible")
+            c1, c2, c3 = st.columns([5, 1.2, 1.1], vertical_alignment="center")
+            c1.markdown(f"**{r['title']}**")
+            c1.caption(r["kind"])
+            c2.markdown(f"**{agent.money(r['impact'], True)}**  \nprofit a year")
             if c3.button("Ask the agent", key=f"ask_rec_{i}", width="stretch"):
                 st.session_state["_open_chat"] = r["ask"]
-
     agent.record_proposals(b["recs"])
-    st.caption("Promotion-level results only. Each recommendation is stored in `agent_proposals` for approval.")
+
+    with st.expander("Detail by offer"):
+        if not ft.empty:
+            st.dataframe(ft, hide_index=True, width="stretch", column_config={
+                "Acceptance": st.column_config.NumberColumn(format="percent"),
+                "Incremental sales ($M/yr)": st.column_config.NumberColumn(format="$%.1fM"),
+                "Gross profit after discount ($M/yr)": st.column_config.NumberColumn(format="$%.1fM"),
+                "Compute + platform ($M/yr)": st.column_config.NumberColumn(format="$%.2fM"),
+                "Operating profit ($M/yr)": st.column_config.NumberColumn(format="$%.1fM"),
+                "ROIC": st.column_config.NumberColumn(format="percent"),
+                "Clears hurdle": st.column_config.CheckboxColumn()})
+        st.caption("Assumptions (store count, margin rate, cannibalization, platform cost, hurdle) are in the "
+                   "finance_assumptions table in Unity Catalog.")
 
 
 @st.dialog("Offer agent", width="large")

@@ -32,7 +32,7 @@ def app_sql(monkeypatch):
     monkeypatch.setenv("NBO_SCHEMA", SCHEMA)
     import data
     data = importlib.reload(data)
-    data.st.cache_data.clear()
+    data.clear_cache()
     seen = []
     monkeypatch.setattr(data, "_query", lambda s, p=None: seen.append((s, p or {})) or pd.DataFrame(
         {"member_id": [1], "event_ts": ["2026-09-30 07:00:00"], "n": [0]}))

@@ -1,163 +1,144 @@
-"""The offer agent: the briefing on the Agent tab and the chat behind the floating button.
+"""The offer agent: the model's recommendations, approvals, the chat behind Ask Genie, and finance exports.
 
-Briefing: what's working, what isn't, and recommended actions, computed from the gold tables
-(promotion level and rates only, never individual shoppers).
+Recommendations are written to `agent_proposals` by the trained recommender (src/09_recommender.py). The app
+reads them, and a person approves or rejects each one; every decision is stored in Unity Catalog
+(`agent_proposals`, `promotion_changes`, `agent_activity`).
 
-Chat: a Multi-Agent Supervisor (Agent Bricks) that routes questions to the Genie space over the same
-governed tables. The build job (src/07_agent.py) creates the supervisor, gives the app's service principal
-permission to query it, and writes its endpoint name to the `agent_config` table, which the app reads here.
-If no supervisor is set up yet, the chat asks the Genie space directly.
+Chat: a Multi-Agent Supervisor (Agent Bricks) that routes questions to the Genie space over the same governed
+tables. If no supervisor is set up yet, the chat asks the Genie space directly.
 """
 
+import json
 import os
 import uuid
 from datetime import datetime, timezone
+from pathlib import Path
 
 import pandas as pd
-import streamlit as st
 
 import data
 import finance
+from cache import ttl_cache
 
 AGENT_NAME = "NBO Offer Agent"
-HURDLE = float(os.getenv("NBO_HURDLE_RATE", "0.101"))  # return each offer must clear, set by finance
 
-
-# ---------------------------------------------------------------------------
-# Briefing
-# ---------------------------------------------------------------------------
 
 def money(x, signed=False):
     """$12.4M, $310K, $950: the scale finance reads at."""
-    sign = "+" if signed and x > 0 else ("−" if x < 0 else "")
+    sign = "+" if signed and x > 0 else ("-" if x < 0 else "")
     a = abs(x)
     body = f"{a / 1e9:.2f}B" if a >= 1e9 else f"{a / 1e6:.1f}M" if a >= 1e6 else f"{a / 1e3:.0f}K" if a >= 1e3 else f"{a:,.0f}"
     return f"{sign}${body}"
 
 
-@st.cache_data(ttl=600)
-def decision_mix():
-    """Share of today's check-ins by decision. Rates only."""
-    d = data.table("offer_decisions")
-    if d.empty:
-        return None
-    mix = d.decision.value_counts(normalize=True)
-    served = d[d.decision == "Offer served"]
-    by_promo = served.promotion_id.value_counts(normalize=True)
-    return {
-        "check_ins": len(d),
-        "served": float(mix.get("Offer served", 0.0)),
-        "no_offer": float(mix.get("No offer", 0.0)),
-        "holdout": float(sum(v for k, v in mix.items() if str(k).startswith("Holdout"))),
-        "by_promo": by_promo.to_dict(),
-    }
+# ---------------------------------------------------------------------------
+# Recommendations from the trained model, and decisions on them
+# ---------------------------------------------------------------------------
+
+def _now():
+    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
 
-@st.cache_data(ttl=600)
-def performance():
-    """Stored measures from offer_performance: acceptance, lift, net return and return on spend. Totals only."""
-    p = data.table("offer_performance")
-    if p.empty:
-        return None
-    s = p[["offers_served", "delivered", "accepted", "redeemed", "holdout_checkins", "holdout_redeemed",
-           "incremental_margin", "discount_cost", "compute_cost_usd", "net_return"]].sum()
-    spend = s.discount_cost + s.compute_cost_usd
-    return {
-        "acceptance_rate": s.accepted / s.delivered if s.delivered else 0.0,
-        "redemption_rate": s.redeemed / s.offers_served if s.offers_served else 0.0,
-        "holdout_rate": s.holdout_redeemed / s.holdout_checkins if s.holdout_checkins else 0.0,
-        "net_return": float(s.net_return),
-        "return_on_spend": float(s.net_return / spend) if spend else 0.0,
-        "compute_cost": float(s.compute_cost_usd),
-        "cost_per_decision": float(s.compute_cost_usd / max(s.offers_served + s.holdout_checkins, 1)),
-        "days": int(p.decision_date.nunique()),
-    }
+def _proposals_frame():
+    if data.LOCAL:
+        path = Path(data.LOCAL_DIR) / "agent_proposals.csv"
+        return pd.read_csv(path) if path.exists() else pd.DataFrame()
+    return data._query(f"SELECT * FROM {data.SCHEMA}.agent_proposals WHERE model_name IS NOT NULL "
+                       f"AND status <> 'superseded' ORDER BY scored_at DESC")
 
 
-def briefing():
-    """Everything the Agent tab shows, as plain data."""
-    pf = data.table("promo_portfolio").copy()
-    # promo_portfolio is per month for the pilot stores: scale to the network, per year
-    n_stores, _ = finance.pilot_scope()
-    k = finance.assumptions()["network_stores"] / n_stores * 12
-    for c in ("targeted_net_margin_per_send", "blast_net_margin_per_send"):
-        pf[c] = pf[c] * k
-    bt = data.table("tier_backtest")
-    promos = data.table("promotions").set_index("promotion_id")
+def _records(df):
+    out = []
+    for r in df.to_dict("records"):
+        r = {k: (None if (not isinstance(v, (list, dict)) and pd.isna(v)) else v) for k, v in r.items()}
+        try:
+            r["evidence"] = json.loads(r.get("evidence") or "[]")
+        except (TypeError, ValueError):
+            r["evidence"] = [r["evidence"]] if r.get("evidence") else []
+        for k in ("decided_at", "created_at", "scored_at", "proposal_date"):
+            if r.get(k) is not None:
+                r[k] = str(r[k])
+        out.append(r)
+    return out
 
-    model_year = float(pf.targeted_net_margin_per_send.sum())
-    rules_year = float(pf.blast_net_margin_per_send.sum())
 
-    lift = {}
-    for tier in ("Persuadable", "Sure Thing"):
-        t = bt[(bt.tier == tier) & (bt.holdout_sends >= 30)]
-        w = t.treatment_sends.sum()
-        lift[tier] = float((t.measured_uplift * t.treatment_sends).sum() / w) if w else 0.0
+def pending():
+    """Open recommendations from the latest scoring run, highest expected profit first."""
+    df = _proposals_frame()
+    if df.empty or "model_name" not in df:
+        return []
+    df = df[df.model_name.notna() & (df.status == "proposed")]
+    return _records(df.sort_values("expected_annual_profit_usd", ascending=False))
 
-    working, not_working, recs = [], [], []
-    for r in pf.itertuples():
-        name = r.short_name
-        anyway = float(r.redemptions_that_would_happen_anyway)
-        if r.targeted_net_margin_per_send <= 0:
-            not_working.append({
-                "title": f"{name} doesn't pay back for any shopper group",
-                "detail": f"Measured lift is {r.measured_uplift_apr_sep * 100:+.1f} pts. At the current discount "
-                          f"the best audience still nets {money(r.targeted_net_margin_per_send)} a year.",
-            })
-            recs.append({
-                "promotion_id": r.promotion_id,
-                "rank_value": abs(r.blast_net_margin_per_send),
-                "kind": "Stop or switch",
-                "title": f"Retire {name}, or switch it to a cheaper incentive",
-                "why": f"No shopper group pays back at the current discount. Static rules lose "
-                       f"{money(-r.blast_net_margin_per_send)} a year on it.",
-                "impact": -r.blast_net_margin_per_send,
-                "ask": f"What would happen to margin if we replaced {name} with a points offer instead of a discount?",
-            })
-        else:
-            gain = r.targeted_net_margin_per_send - r.blast_net_margin_per_send
-            working.append({
-                "title": f"{name} earns {money(r.targeted_net_margin_per_send)} a year when the model targets it",
-                "detail": f"Measured lift {r.measured_uplift_apr_sep * 100:+.1f} pts. "
-                          f"{r.persuadable_members / max(r.eligible_members, 1):.0%} of eligible shoppers are "
-                          f"persuadable.",
-            })
-            if r.blast_net_margin_per_send < 0:
-                not_working.append({
-                    "title": f"Sent to everyone, {name} loses {money(-r.blast_net_margin_per_send)} a year",
-                    "detail": f"{anyway:.0%} of its redemptions would have happened without the offer.",
-                })
-            recs.append({
-                "promotion_id": r.promotion_id,
-                "rank_value": gain,
-                "kind": "Scale" if r.blast_net_margin_per_send >= 0 else "Retarget",
-                "title": (f"Scale {name} to more persuadable shoppers" if r.blast_net_margin_per_send >= 0
-                          else f"Send {name} only to shoppers it changes"),
-                "why": f"Targeted by the model it nets {money(r.targeted_net_margin_per_send)} a year, "
-                       f"vs {money(r.blast_net_margin_per_send)} sent to everyone eligible.",
-                "impact": gain,
-                "ask": f"Which shopper segments and times of day drive the return on {name}?",
-            })
-    recs.sort(key=lambda x: -x["rank_value"])
 
-    return {
-        "model_year": model_year,
-        "rules_year": rules_year,
-        "lift": lift,
-        "mix": decision_mix(),
-        "perf": performance(),
-        "working": working,
-        "not_working": not_working,
-        "recs": recs,
-        "promo_names": promos.short_name.to_dict(),
-    }
+def decided(limit=10):
+    df = _proposals_frame()
+    if df.empty or "model_name" not in df:
+        return []
+    df = df[df.status.isin(["approved", "rejected"])].sort_values("decided_at", ascending=False).head(limit)
+    return _records(df)
+
+
+def all_current():
+    df = _proposals_frame()
+    if df.empty or "model_name" not in df:
+        return []
+    df = df[df.model_name.notna() & df.status.isin(["proposed", "approved", "rejected"])]
+    return _records(df.sort_values("expected_annual_profit_usd", ascending=False))
+
+
+def decide(proposal_id, status, reason=None):
+    """Approve, reject, or undo (status='proposed') a recommendation. Writes agent_proposals, and for an
+    approval or an undone approval, promotion_changes. Returns the updated recommendation."""
+    if status not in ("approved", "rejected", "proposed"):
+        raise ValueError("status must be approved, rejected or proposed")
+    user, now = data.current_user(), _now()
+    rows = [r for r in all_current() if r["proposal_id"] == proposal_id]
+    if not rows:
+        raise KeyError(proposal_id)
+    r, before = rows[0], rows[0]["status"]
+    who, when = (None, None) if status == "proposed" else (user, now)
+    why = reason if status == "rejected" else None
+    if data.LOCAL:
+        path = Path(data.LOCAL_DIR) / "agent_proposals.csv"
+        df = pd.read_csv(path)
+        m = df.proposal_id == proposal_id
+        df["decided_by"] = df["decided_by"].astype(object)
+        df["decided_at"] = df["decided_at"].astype(object)
+        df["reject_reason"] = df["reject_reason"].astype(object)
+        df.loc[m, ["status", "decided_by", "decided_at", "reject_reason"]] = [status, who, when, why]
+        df.to_csv(path, index=False)
+    else:
+        data._query(f"UPDATE {data.SCHEMA}.agent_proposals SET status = :s, decided_by = :u, "
+                    f"decided_at = CAST(:t AS TIMESTAMP), reject_reason = :w WHERE proposal_id = :p",
+                    {"s": status, "u": who, "t": when, "w": why, "p": proposal_id})
+    if status == "approved" or before == "approved":
+        data.append_rows("promotion_changes", [{
+            "change_id": str(uuid.uuid4()), "promotion_id": r["promotion_id"],
+            "change_type": r["action"] if status == "approved" else "reverted", "field": "targeting",
+            "old_value": None, "new_value": r["title"], "reason": r["rationale"],
+            "source": f"{r['model_name']} v{r['model_version']}, approved" if status == "approved" else "undo",
+            "changed_by": user, "changed_at": now}])
+    record_activity("decision", f"{status}: {r['title']}" + (f" ({reason})" if why else ""))
+    r.update(status=status, decided_by=who, decided_at=when, reject_reason=why)
+    return r
+
+
+def record_activity(kind, content, routed=""):
+    """Store a question asked of the agent (or a decision) in agent_activity."""
+    try:
+        data.append_rows("agent_activity", [{
+            "activity_id": str(uuid.uuid4()), "activity_type": kind, "content": content[:2000],
+            "routed_to": routed, "user_name": data.current_user(), "created_at": _now()}])
+    except Exception:
+        pass
 
 
 # ---------------------------------------------------------------------------
-# Chat: supervisor endpoint, with Genie as the fallback
+# Chat: supervisor, Genie, local preview
 # ---------------------------------------------------------------------------
 
-@st.cache_data(ttl=60)
+@ttl_cache(60)
 def config():
     """Agent settings: app.yaml env vars first, then the agent_config table written by the build job."""
     cfg = {"endpoint": os.getenv("AGENT_ENDPOINT", "").strip(), "genie_space_id": data.GENIE_SPACE_ID}
@@ -218,18 +199,12 @@ def _genie(question):
 
 
 def _local_answer(question):
-    """Local preview: answer from the briefing so the chat can be tried without a workspace."""
-    b = briefing()
-    q = question.lower()
-    if any(k in q for k in ("not working", "lose", "losing", "worst", "stop", "retire")):
-        lines = [f"- **{n['title']}.** {n['detail']}" for n in b["not_working"]]
-        return "Here's what isn't working:\n\n" + "\n".join(lines)
-    if any(k in q for k in ("recommend", "should", "next", "do")):
-        lines = [f"{i}. **{r['title']}.** {r['why']}" for i, r in enumerate(b["recs"][:3], 1)]
-        return "My top recommendations, ranked by yearly margin:\n\n" + "\n".join(lines)
-    lines = [f"- **{w['title']}.** {w['detail']}" for w in b["working"]]
-    return ("Local preview: the chat answers from the briefing. On Databricks it goes to the supervisor and "
-            "the Genie space.\n\nWhat's working:\n\n" + "\n".join(lines))
+    """Local preview: answer from the stored recommendations so the chat can be tried without a workspace."""
+    p = pending()
+    lines = [f"- **{r['title']}.** {money(r['expected_annual_profit_usd'], True)} profit a year. "
+             f"{'; '.join(r['evidence'])}." for r in p[:3]]
+    return ("Local preview. On Databricks this goes to the supervisor and the Genie space.\n\n"
+            "Top recommendations from the model:\n\n" + "\n".join(lines))
 
 
 def ask(history):
@@ -254,45 +229,9 @@ def ask(history):
                 "content": f"The agent couldn't answer: {str(e).splitlines()[0][:200]}"}
 
 
-# ---------------------------------------------------------------------------
-# Ledger: every proposal and every question is stored in Unity Catalog
-# ---------------------------------------------------------------------------
-
-def _now():
-    return datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
-
-
-def record_proposals(recs):
-    """Store today's recommendations in agent_proposals, once per app session, with status 'proposed'."""
-    if st.session_state.get("_proposals_logged"):
-        return
-    st.session_state["_proposals_logged"] = True
-    today, now = datetime.now(timezone.utc).strftime("%Y-%m-%d"), _now()
-    seen = set()
-    if not data.LOCAL:
-        try:
-            seen = set(data._query(f"SELECT proposal_id FROM {data.SCHEMA}.agent_proposals "
-                                   f"WHERE proposal_date = current_date()").proposal_id)
-        except Exception:
-            pass
-    recs = [r for r in recs if f"{today}-{r['promotion_id']}-{r['kind']}" not in seen]
-    data.append_rows("agent_proposals", [{
-        "proposal_id": f"{today}-{r['promotion_id']}-{r['kind']}", "proposal_date": today,
-        "promotion_id": r["promotion_id"], "kind": r["kind"], "title": r["title"], "rationale": r["why"],
-        "expected_monthly_impact_usd": float(r["impact"]) / 12, "status": "proposed", "decided_by": None,
-        "decided_at": None, "created_at": now} for r in recs])
-
-
-def record_activity(kind, content, routed=""):
-    """Store a question asked of the agent (or an action it took) in agent_activity."""
-    data.append_rows("agent_activity", [{
-        "activity_id": str(uuid.uuid4()), "activity_type": kind, "content": content[:2000], "routed_to": routed,
-        "user_name": data.current_user(), "created_at": _now()}])
-
-
 
 # ---------------------------------------------------------------------------
-# Finance view: top line, bottom line and ROIC vs the hurdle; report and EPM export
+# Finance view: report and EPM export
 # ---------------------------------------------------------------------------
 
 def finance_table():
@@ -313,7 +252,8 @@ def finance_table():
     return out.sort_values("ROIC", ascending=False).reset_index(drop=True), total
 
 
-def finance_report_html(b, t, total):
+def finance_report_html(t, total):
+    b = pending()
     """One-page report for CFO sign-off, in the Databricks brand system."""
     import html as h
     a = finance.assumptions()
@@ -322,7 +262,8 @@ def finance_report_html(b, t, total):
         f"<td>{money(r['Operating profit ($M/yr)'] * 1e6, True)}</td><td>{r.ROIC:.1%}</td>"
         f"<td class='{'ok' if r['Clears hurdle'] else 'no'}'>{'Yes' if r['Clears hurdle'] else 'No'}</td></tr>"
         for _, r in t.iterrows())
-    recs = "".join(f"<li><b>{h.escape(r['title'])}.</b> {h.escape(r['why'])}</li>" for r in b["recs"])
+    recs = "".join(f"<li><b>{h.escape(r['title'])}.</b> {money(r['expected_annual_profit_usd'], True)} a year. "
+                   f"{h.escape('; '.join(r['evidence']))}</li>" for r in b)
     assump = "".join(f"<tr><td>{h.escape(k)}</td><td>{a[k]:,.3g}</td><td>{h.escape(v[2])}</td></tr>"
                      for k, v in finance.DEFAULTS.items())
     return f"""<!doctype html><html><head><meta charset="utf-8"><title>Offer engine: finance report</title>
@@ -369,51 +310,12 @@ def epm_export_csv():
     return long.to_csv(index=False)
 
 
+
 # ---------------------------------------------------------------------------
-# Approvals and the AI/BI dashboard
+# AI/BI dashboard
 # ---------------------------------------------------------------------------
 
-def _proposal_id(r):
-    return f"{datetime.now(timezone.utc):%Y-%m-%d}-{r['promotion_id']}-{r['kind']}"
-
-
-def proposal_status(r):
-    """proposed, approved or rejected. Session first, then agent_proposals."""
-    pid = _proposal_id(r)
-    decided = st.session_state.setdefault("_decisions", {})
-    if pid in decided:
-        return decided[pid]
-    if not data.LOCAL:
-        try:
-            rows = data._query(f"SELECT status FROM {data.SCHEMA}.agent_proposals WHERE proposal_id = :p "
-                               f"ORDER BY created_at DESC LIMIT 1", {"p": pid})
-            if not rows.empty and rows.status.iloc[0]:
-                return rows.status.iloc[0]
-        except Exception:
-            pass
-    return "proposed"
-
-
-def decide_proposal(r, status):
-    """Record the decision in agent_proposals and, if approved, the change in promotion_changes."""
-    pid, now, user = _proposal_id(r), _now(), data.current_user()
-    st.session_state.setdefault("_decisions", {})[pid] = status
-    if not data.LOCAL:
-        try:
-            data._query(f"UPDATE {data.SCHEMA}.agent_proposals SET status = :s, decided_by = :u, "
-                        f"decided_at = CAST(:t AS TIMESTAMP) WHERE proposal_id = :p",
-                        {"s": status, "u": user, "t": now, "p": pid})
-        except Exception as e:
-            st.toast(f"Approval write skipped: {str(e).splitlines()[0][:120]}")
-    if status == "approved":
-        data.append_rows("promotion_changes", [{
-            "change_id": str(uuid.uuid4()), "promotion_id": r["promotion_id"], "change_type": r["kind"],
-            "field": None, "old_value": None, "new_value": r["title"], "reason": r["why"],
-            "source": "agent, approved", "changed_by": user, "changed_at": now}])
-    record_activity("approval", f"{status}: {r['title']}")
-
-
-@st.cache_data(ttl=600)
+@ttl_cache(600)
 def dashboard_urls():
     """(open URL, embed URL) of the published AI/BI dashboard, found by name. Empty strings if not found."""
     name = os.getenv("NBO_DASHBOARD_NAME", "NBO Offer Engine")

@@ -6,9 +6,9 @@ finance owns and can edit in Unity Catalog. DEFAULTS only seed that table on the
 """
 
 import pandas as pd
-import streamlit as st
 
 import data
+from cache import ttl_cache
 
 MIN_OFFERS = 100  # offers served before a program's ROIC is shown; fewer is too noisy to call
 
@@ -26,7 +26,7 @@ DEFAULTS = {
 }
 
 
-@st.cache_data(ttl=300)
+@ttl_cache(300)
 def assumptions():
     """{key: value}. From the finance_assumptions table on Databricks; DEFAULTS in local preview."""
     vals = {k: float(v[0]) for k, v in DEFAULTS.items()}

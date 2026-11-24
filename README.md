@@ -133,12 +133,22 @@ They run on every pull request (`.github/workflows/tests.yml`). After a deploy, 
 ## Preview locally, no workspace
 
 ```bash
-pip install pandas numpy scikit-learn==1.5.2 pyarrow streamlit altair
-python local_run.py                      # builds the same tables into .local_data/ in ~20s
-NBO_LOCAL_DATA=.local_data streamlit run app/app.py
+pip install pandas numpy scikit-learn==1.5.2 pyarrow fastapi uvicorn
+python local_run.py                      # builds the same tables and the recommender's proposals into .local_data/
+cd app && NBO_LOCAL_DATA=../.local_data uvicorn server:app --port 8000
 ```
 
-Locally the app runs an in-process copy of the decision service (same learners, same `nbo_decision.py`) instead of calling the endpoint, and says so on screen.
+Open http://localhost:8000. The app is a React front end (`frontend/`, built into `app/static/`) served by a FastAPI
+back end (`app/server.py`). After changing the front end: `cd frontend && npm install && npm run build`, then commit
+`app/static/`. The Databricks App runs the built files, no Node step on deploy.
+
+## The recommender
+
+Step 9 (`src/09_recommender.py`) trains `nbo_recommender`, a random forest that predicts net margin per offer for each
+promotion x region under each targeting policy, from `promo_monthly` (history) and `offer_performance` (the engine).
+It scores pause, scale, switch-to-model-targeting and move-volume changes, writes the top ones to `agent_proposals`
+with their evidence, confidence and model version, and registers the model in Unity Catalog. The Recommendations tab
+shows only these rows. Step 9 also creates the metric view `nbo_offer_metrics`.
 
 ## Numbers the data is built to produce
 

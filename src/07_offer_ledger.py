@@ -52,9 +52,16 @@ try:
           ON u.sku_name = p.sku_name AND u.usage_start_time >= p.price_start_time
          AND (p.price_end_time IS NULL OR u.usage_end_time <= p.price_end_time)
         WHERE u.usage_metadata.endpoint_name = '{endpoint}' AND u.usage_date >= current_date() - 30
+          AND u.billing_origin_product = 'MODEL_SERVING'
     """).first().usd
-    calls = spark.sql(f"SELECT COUNT(*) AS n FROM {fq}.live_decision_log "
-                      f"WHERE logged_at >= current_date() - 30").first().n
+    # Denominator = every request the endpoint served in the same 30 days. The inference table logs all of
+    # them; live_decision_log only holds calls made from the app, which undercounts and inflates the rate.
+    try:
+        calls = spark.sql(f"SELECT COUNT(*) AS n FROM {fq}.nbo_decision_payload "
+                          f"WHERE request_time >= current_date() - 30").first().n
+    except Exception:
+        calls = spark.sql(f"SELECT COUNT(*) AS n FROM {fq}.live_decision_log "
+                          f"WHERE logged_at >= current_date() - 30").first().n
     if spend and calls:
         cost_per_decision, cost_source = float(spend) / calls, f"system.billing, last 30 days, {calls:,} calls"
 except Exception as e:

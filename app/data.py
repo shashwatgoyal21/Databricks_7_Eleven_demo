@@ -14,8 +14,16 @@ import time
 from datetime import datetime, timezone
 from pathlib import Path
 
+import contextvars
+import logging
+
 import pandas as pd
-import streamlit as st
+
+from cache import clear_all as clear_cache  # noqa: F401
+from cache import resource, ttl_cache
+
+log = logging.getLogger("nbo")
+USER = contextvars.ContextVar("user", default="demo.user@local")
 
 SCHEMA = os.getenv("NBO_SCHEMA", "workspace.nbo_demo")
 LOCAL_DIR = os.getenv("NBO_LOCAL_DATA")
@@ -30,7 +38,7 @@ PROFILE_COLS = ["member_id", "first_name", "last_name", "crm_segment", "region",
                 "late_night_share", "roller_grill_rate", "sandwich_rate", "energy_drink_rate"]
 
 
-@st.cache_resource
+@resource
 def _connection():
     from databricks import sql
     from databricks.sdk.core import Config
@@ -59,15 +67,17 @@ def source_label():
     return f"Unity Catalog `{SCHEMA}` via Databricks SQL warehouse"
 
 
-@st.cache_data(ttl=600)
+@ttl_cache(600)
 def table(name):
-    """Small gold tables, read whole."""
+    """Small gold tables, read whole. Locally, ledger tables the app appends to are CSV files."""
     if LOCAL:
+        if not (Path(LOCAL_DIR) / f"{name}.parquet").exists() and (Path(LOCAL_DIR) / f"{name}.csv").exists():
+            return pd.read_csv(Path(LOCAL_DIR) / f"{name}.csv")
         return _local(name)
     return _query(f"SELECT * FROM {SCHEMA}.{name}")
 
 
-@st.cache_data(ttl=600)
+@ttl_cache(600)
 def stores_by_traffic():
     """Stores with check-in counts on the live day, busiest first."""
     if LOCAL:
@@ -81,7 +91,7 @@ def stores_by_traffic():
                       ORDER BY check_ins DESC""")
 
 
-@st.cache_data(ttl=600)
+@ttl_cache(600)
 def store_feed(store_id):
     """Everything the decision path needs for one store's live day, fetched once:
     the check-in stream, the shoppers' uplift scores (all promotions), and their profiles.
@@ -107,7 +117,7 @@ def store_feed(store_id):
     return ev, sc, pr, (time.perf_counter() - t0) * 1000
 
 
-@st.cache_data(ttl=600)
+@ttl_cache(600)
 def event_bundle(event_id):
     """One check-in with its shopper's scores and profile, for the decision trace."""
     if LOCAL:
@@ -130,7 +140,7 @@ def event_bundle(event_id):
     return ev, sc, pr
 
 
-@st.cache_data(ttl=600)
+@ttl_cache(600)
 def table_counts(names):
     """Row counts for the pipeline view."""
     if LOCAL:
@@ -144,7 +154,7 @@ def table_counts(names):
     return out
 
 
-@st.cache_resource
+@resource
 def _local_service():
     """Local stand-in for the endpoint: same learners and code, features read from parquet."""
     import pickle
@@ -158,12 +168,12 @@ def _local_service():
     return models, feats
 
 
-@st.cache_resource
+@resource
 def _local_stores():
     return _local("stores").set_index("store_id")[["has_fresh_bakery", "region", "city"]]
 
 
-@st.cache_resource
+@resource
 def _workspace():
     from databricks.sdk import WorkspaceClient
 
@@ -171,6 +181,7 @@ def _workspace():
 
 
 GENIE_SPACE_ID = os.getenv("GENIE_SPACE_ID", "").strip()
+GENIE_TIMEOUT_S = int(os.getenv("GENIE_TIMEOUT_S", "90"))
 
 
 def genie_enabled():
@@ -180,7 +191,10 @@ def genie_enabled():
 def ask_genie(question):
     """Ask the Genie space one question. Returns {"texts": [...], "queries": [{description, sql, frame}]}."""
     w = _workspace()
-    msg = w.genie.start_conversation_and_wait(GENIE_SPACE_ID, question)
+    from datetime import timedelta
+
+    msg = w.genie.start_conversation_and_wait(GENIE_SPACE_ID, question,
+                                              timeout=timedelta(seconds=GENIE_TIMEOUT_S))
     out = {"texts": [], "queries": []}
     for att in msg.attachments or []:
         if att.text and att.text.content:
@@ -233,16 +247,14 @@ def call_decision_service(event):
         else:
             return req, None, 0.0
     except Exception as e:
-        st.session_state["endpoint_error"] = str(e).splitlines()[0][:200]
+        log.warning("decision service: %s", str(e).splitlines()[0][:200])
         return req, None, (time.perf_counter() - t0) * 1000
     return req, resp, (time.perf_counter() - t0) * 1000
 
 
 def current_user():
-    try:
-        return st.context.headers.get("X-Forwarded-Email") or "demo.user@local"
-    except Exception:
-        return "demo.user@local"
+    """The signed-in user, from the X-Forwarded-Email header the API middleware stores per request."""
+    return USER.get()
 
 
 def log_decisions(rows):
@@ -268,11 +280,11 @@ def log_decisions(rows):
                    (event_id, store_id, member_id, decision, promotion_id, channel, latency_ms, logged_by, logged_at)
                    VALUES {", ".join(values)}""", params)
     except Exception as e:  # logging must never break the live demo
-        st.toast(f"Decision log write skipped: {str(e).splitlines()[0][:120]}")
+        log.warning("Decision log write skipped: %s", str(e).splitlines()[0][:120])
 
 
 def append_rows(name, rows):
-    """Append rows to a ledger table (agent_proposals, agent_activity, promotion_changes). Never raises."""
+    """Append rows to a ledger table (agent_proposals, agent_activity, promotion_changes). Raises on failure."""
     if not rows:
         return
     df = pd.DataFrame(rows)
@@ -292,4 +304,5 @@ def append_rows(name, rows):
                 params[f"{c}{i}"] = None if pd.isna(v) else (v.item() if hasattr(v, "item") else v)
         _query(f"INSERT INTO {SCHEMA}.{name} ({', '.join(cols)}) VALUES {', '.join(values)}", params)
     except Exception as e:  # a ledger write must never break the app
-        st.toast(f"{name} write skipped: {str(e).splitlines()[0][:120]}")
+        log.warning("%s write skipped: %s", name, str(e).splitlines()[0][:120])
+        raise

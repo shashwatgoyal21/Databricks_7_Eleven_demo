@@ -22,7 +22,7 @@ def captured_sql(monkeypatch):
     monkeypatch.setenv("NBO_SCHEMA", "nbo_demo")
     import data
     data = importlib.reload(data)
-    data.st.cache_data.clear()
+    data.clear_cache()
     seen = []
 
     def fake_query(sql_text, params=None):

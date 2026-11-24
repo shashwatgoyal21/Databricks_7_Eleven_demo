@@ -184,7 +184,8 @@
     "SELECT daypart, SUM(accepted) / NULLIF(SUM(delivered), 0) AS acceptance_rate,\n",
     "       SUM(redeemed) / NULLIF(SUM(offers_served), 0) AS redemption_rate,\n",
     "       SUM(holdout_redeemed) / NULLIF(SUM(holdout_checkins), 0) AS holdout_rate\n",
-    "FROM workspace.nbo_demo.offer_performance GROUP BY daypart\n"
+    "FROM workspace.nbo_demo.offer_performance GROUP BY daypart\n",
+    "HAVING SUM(offers_served) >= 100 AND SUM(holdout_checkins) >= 30\n"
    ]
   },
   {

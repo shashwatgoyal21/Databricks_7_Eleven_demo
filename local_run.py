@@ -1,10 +1,10 @@
 """Run the whole pipeline locally in pandas and write the gold tables to .local_data/.
 
-The Streamlit app reads .local_data/ when NBO_LOCAL_DATA is set, so the demo can be
+The app reads .local_data/ when NBO_LOCAL_DATA is set, so the demo can be
 previewed without a workspace:
 
     python local_run.py
-    NBO_LOCAL_DATA=.local_data streamlit run app/app.py
+    cd app && NBO_LOCAL_DATA=../.local_data uvicorn server:app --port 8000
 """
 
 import sys
@@ -35,6 +35,12 @@ print(f"Built in {time.time() - t0:.0f}s: {len(raw['pos_baskets']):,} baskets, "
 for name, df in {"promotions": raw["promotions"], "stores": raw["stores"],
                  "instore_events": raw["instore_events"], **gold}.items():
     df.to_parquet(out / f"{name}.parquet", index=False)
+
+# The recommender's proposals and empty ledgers, as the build job writes them
+tables = {"promotions": raw["promotions"], "stores": raw["stores"], **gold}
+nbo_lib.recommend_from_tables(tables, nbo_lib.DEFAULT_ASSUMPTIONS).to_csv(out / "agent_proposals.csv", index=False)
+for ledger in ("promotion_changes.csv", "agent_activity.csv"):
+    (out / ledger).unlink(missing_ok=True)
 
 nbo_lib.story_checks(nbo_lib.story_numbers(gold["promo_monthly"], gold["promo_portfolio"], gold["tier_backtest"]))
 print()

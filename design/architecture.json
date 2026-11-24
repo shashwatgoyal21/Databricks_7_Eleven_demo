@@ -1,0 +1,89 @@
+[
+  {
+    "name": "NBO Decision Engine",
+    "story": "A shopper walks into a store; the retailer's app backend makes one call to the nbo-decision Model Serving endpoint, which reads features from the Lakebase online store, scores the uplift model, applies live rules and holdout, and returns one offer (or none) that the retailer's existing push stack delivers. Every decision is logged, governed in Unity Catalog, and analyzed in the app, AI/BI dashboard, Genie, and the NBO Offer Agent.",
+    "rowGrid": true,
+    "columns": ["sources", "pipeline", "features", "models", "serving", "lakehouse", "consume"],
+    "nodes": [
+      { "id": "src-loyalty", "type": "source", "col": "sources", "label": "Loyalty members", "icon": "inputData", "desc": "Shoppers, region, opt-ins" },
+      { "id": "src-pos", "type": "source", "col": "sources", "label": "POS baskets", "icon": "inputData", "desc": "~3.3M baskets" },
+      { "id": "src-promos", "type": "source", "col": "sources", "label": "Stores + promotions", "icon": "inputData", "desc": "120 stores, 5 promotions, offer history" },
+
+      { "id": "lakeflow", "type": "lakeflow-block", "col": "pipeline", "row": 0,
+        "params": { "bronze_desc": "instore_events, raw tables", "silver_desc": "Conformed baskets + offers", "gold_desc": "promo_monthly, offer_performance" } },
+      { "id": "stream-job", "type": "lakeflow-jobs", "col": "pipeline", "row": 4, "label": "Streaming decisions", "desc": "Structured Streaming, writes offer_decisions",
+        "ai_reasoning": "05_stream_decisions.py: same decision path per micro-batch over instore_events; relabeled lakeflow-jobs tile" },
+
+      { "id": "feature-store", "type": "feature-store", "col": "features", "row": 0, "desc": "member_features (key member_id)" },
+      { "id": "lakebase", "type": "lakebase", "col": "features", "row": 2, "label": "Lakebase online store", "desc": "Features + store inventory by key" },
+
+      { "id": "model-training", "type": "model-training", "col": "models", "row": 0, "label": "Uplift model training", "desc": "Two response models per promotion" },
+      { "id": "registry", "type": "uc-model-registry", "col": "models", "row": 2, "desc": "nbo_decision_service @prod" },
+      { "id": "recommender", "type": "ml-model", "col": "models", "row": 4, "label": "nbo_recommender", "desc": "Random forest, writes agent_proposals",
+        "ai_reasoning": "09_recommender.py: predicts net margin per promotion x region x policy; feeds the Recommendations tab" },
+
+      { "id": "model-serving", "type": "model-serving", "col": "serving", "row": 2, "label": "nbo-decision endpoint", "desc": "Features, uplift, live rules, holdout" },
+
+      { "id": "sql-lakehouse", "type": "sql-lakehouse", "col": "lakehouse", "row": 4, "desc": "SQL warehouse over gold + decision logs" },
+
+      { "id": "app", "type": "databricks-apps-work", "col": "consume", "row": 0, "label": "nbo-decision-engine", "desc": "Live in-store console, trace, recommendations" },
+      { "id": "agent", "type": "supervisor-agent", "col": "consume", "row": 2, "label": "NBO Offer Agent", "desc": "Multi-Agent Supervisor" },
+      { "id": "genie", "type": "genie", "col": "consume", "row": 4 },
+      { "id": "dashboard", "type": "ai-bi-dashboard", "col": "consume", "row": 6, "label": "NBO Offer Engine dashboard", "desc": "Decisions, suppression reasons, latency, lift" },
+
+      { "id": "db-platform", "type": "db-platform", "pin": { "at": "top-left", "to": "platform-box" } },
+      { "id": "governance-block", "type": "governance-block", "pin": { "at": "top-right", "to": "platform-box" },
+        "params": { "genie_ontology": false },
+        "ai_reasoning": "UC row filter by region, PII mask, metric views, grants; AI Gateway inference table on the endpoint. No ontology in this build." },
+
+      { "id": "platform-box", "type": "box",
+        "wraps": ["src-loyalty", "src-pos", "src-promos", "lakeflow", "stream-job", "feature-store", "lakebase", "model-training", "registry", "recommender", "model-serving", "sql-lakehouse", "app", "agent", "genie", "dashboard"] },
+
+      { "id": "app-backend", "type": "source", "col": "serving", "row": 8, "label": "Retailer app backend", "icon": "text", "desc": "Service principal token" },
+      { "id": "push-stack", "type": "source", "col": "serving", "row": 9, "label": "Push stack", "icon": "file:vendor/braze", "desc": "Braze / Airship / OneSignal" },
+      { "id": "mobile-app", "type": "source", "col": "consume", "row": 8, "label": "Shopper mobile app + pin-pad", "icon": "file:persona/user", "desc": "Location shared once" },
+      { "id": "retailer-box", "type": "box", "title": "Retailer stack (unchanged)", "wraps": ["app-backend", "push-stack", "mobile-app"], "style": { "borderStyle": "dashed" } },
+
+      { "id": "note-seam", "type": "note", "text": "One HTTPS call: member_id, store_id, event_ts. Databricks returns the offer and push text; the retailer's push stack delivers it.", "leftOf": "retailer-box", "gap": 32 },
+      { "id": "note-holdout", "type": "note", "text": "10% holdout on every decision. ~18% of check-ins get an offer; ~80% are suppressed on purpose.", "rightOf": "model-serving", "gap": 24 },
+      { "id": "note-synthetic", "type": "note", "text": "Demo data is synthetic (01_generate_data). Check-ins land in instore_events; Zerobus is the production path.", "below": "src-promos", "gap": 32 },
+      { "id": "note-deploy", "type": "note", "text": "One Lakeflow Job (nbo-demo-build) runs steps 01-09; the whole build deploys with one bundle.", "below": "stream-job", "gap": 32 }
+    ],
+    "edges": [
+      { "id": "e-src1", "from": "src-loyalty", "to": "lakeflow@in-lakeflow-connect", "flow": true },
+      { "id": "e-src2", "from": "src-pos", "to": "lakeflow@in-lakeflow-connect", "flow": true },
+      { "id": "e-src3", "from": "src-promos", "to": "lakeflow@in-lakeflow-connect", "flow": true },
+      { "id": "e-checkins", "from": "app-backend", "to": "lakeflow@in-zerobus", "flow": true, "label": "Check-in stream (Zerobus)" },
+
+      { "id": "e-feat", "from": "lakeflow", "to": "feature-store", "flow": true, "label": "Features" },
+      { "id": "e-online", "from": "feature-store", "to": "lakebase", "flow": true, "label": "Online sync" },
+      { "id": "e-train", "from": "feature-store", "to": "model-training", "flow": true },
+      { "id": "e-register", "from": "model-training", "to": "registry", "flow": true, "label": "Register" },
+      { "id": "e-load", "from": "registry", "to": "model-serving", "flow": true, "label": "@prod" },
+      { "id": "e-lookup", "from": "lakebase", "to": "model-serving", "flow": true, "label": "Feature lookup" },
+
+      { "id": "e-stream-in", "from": "lakeflow", "to": "stream-job", "flow": true, "label": "instore_events" },
+      { "id": "e-stream-model", "from": "registry", "to": "stream-job", "label": "Decision model" },
+      { "id": "e-stream-out", "from": "stream-job", "to": "sql-lakehouse", "flow": true, "label": "offer_decisions" },
+
+      { "id": "e-gold", "from": "lakeflow", "to": "sql-lakehouse", "flow": true, "label": "Gold tables" },
+      { "id": "e-reco-in", "from": "lakeflow", "to": "recommender", "flow": true },
+      { "id": "e-reco-out", "from": "recommender", "to": "sql-lakehouse", "flow": true, "label": "agent_proposals" },
+      { "id": "e-inference", "from": "model-serving", "to": "sql-lakehouse", "flow": true, "label": "Inference table (AI Gateway)" },
+
+      { "id": "e-dash", "from": "sql-lakehouse", "to": "dashboard", "flow": true },
+      { "id": "e-genie", "from": "sql-lakehouse", "to": "genie", "flow": true, "label": "Metric view" },
+      { "id": "e-agent-genie", "from": "agent", "to": "genie", "label": "Routes" },
+      { "id": "e-app-sql", "from": "sql-lakehouse", "to": "app", "flow": true, "label": "Queries + live_decision_log" },
+      { "id": "e-app-serving", "from": "app", "to": "model-serving", "label": "Simulated check-ins" },
+      { "id": "e-app-agent", "from": "app", "to": "agent", "label": "Chat" },
+
+      { "id": "e-walkin", "from": "mobile-app", "to": "app-backend", "arrow": "end", "label": "Entered store" },
+      { "id": "e-decide", "from": "app-backend", "to": "model-serving", "arrow": "both", "label": "Check-in / offer + push text" },
+      { "id": "e-push", "from": "app-backend", "to": "push-stack", "arrow": "end", "label": "push_title, offer_message" },
+      { "id": "e-deliver", "from": "push-stack", "to": "mobile-app", "arrow": "end", "label": "Push + pin-pad" },
+      { "id": "e-demo-push", "from": "app", "to": "push-stack", "arrow": "end", "dashed": true, "label": "Demo pushes (ntfy)",
+        "ai_reasoning": "app/push.py sends real pushes from the demo app when 'Send real pushes' is on" }
+    ]
+  }
+]

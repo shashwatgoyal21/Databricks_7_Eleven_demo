@@ -14,6 +14,14 @@
 
 # COMMAND ----------
 
+# MAGIC %pip install -q "mlflow>=2.22.0" scikit-learn==1.5.2
+
+# COMMAND ----------
+
+dbutils.library.restartPython()
+
+# COMMAND ----------
+
 dbutils.widgets.text("catalog", "workspace")
 dbutils.widgets.text("schema", "nbo_demo")
 dbutils.widgets.text("app_name", "nbo-decision-engine")

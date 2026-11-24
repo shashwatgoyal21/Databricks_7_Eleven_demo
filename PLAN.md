@@ -1,9 +1,16 @@
-# Real-Time NBO Decision Engine — Implementation Plan (draft)
+# Agentic Next Best Offer — Implementation Plan
 
-> Status: **Concept not ready.** 9 of 15 sections fillable from the repo; 6 owner decisions block the rest (§14a). · 2026-11-24
+> Status: **Concept defined 2026-11-24; 1 owner decision open (D5 workspace). Build not started.** Decisions in §14a.
 > Baseline: `chehaba/databricks-app` @ `ceb8d85` (main). Canonical intent today: `README.md` + `NBO - Demo Script.md` + `design/appkit-app-design.md` — these disagree with the shipped app (§0).
 > All shoppers, stores, numbers and the retailer brand are fictional.
 > Method: drafted from the repo + live dev workspace read-only checks; independently audited by an advisor (Plan agent). Every fact below is cited or marked OPEN.
+
+## Demo concept (decided 2026-11-24)
+
+1. **Customer 360.** Every shopper has a profile from POS baskets, loyalty and past offer responses (`member_features`, keyed on `member_id`).
+2. **Real-time decision.** On each check-in, the `nbo-decision` endpoint picks the best offer for that shopper in milliseconds, or none. Automatic, no human. Push delivery stays with the retailer's stack and is not shown in the demo.
+3. **Campaign agent.** Watches results and starts, stops and scales offers on its own within guardrails. No approval queue; a human can revert. The decision endpoint reads the live campaign state on every check-in.
+4. **Dashboard.** Shows what the agent did (started, stopped, scaled), why, and the profit impact.
 
 ## 0. Concept contradictions found (verified)
 
@@ -93,7 +100,10 @@ Layer responsibilities: raw (`stores`, `loyalty_members`, `pos_baskets`, `promot
 - Story fixtures: `featured_events` (Decision Trace cases); hero promotion PR01.
 - Quality check: `story_checks` (non-failing — C11).
 
-## 6. Application and agent design — OPEN D1
+## 6. Application and agent design
+**Target (D1):** screens = Agent activity (what it started, stopped, scaled, why, impact) · Programs (status, return vs target) · Customer 360 (one shopper's profile and the offer they'd get now) · Ask the agent. Guardrails shown and editable by a human; Revert on every agent action.
+
+As built:
 Built: 5 tabs + Genie drawer (`App.jsx`). Designed: 4 screens + routes `POST /api/checkin`, `POST /api/decision-log` (`design/appkit-app-design.md:13-28`).
 Agent boundaries (built): Supervisor routes to Genie space `nbo_performance`; chat falls back to Genie, then local text (`app/agent.py:157-226`). **OPEN:** can an agent answer ever trigger an action, or Q&A only; Genie table set (C7).
 
@@ -101,10 +111,10 @@ Agent boundaries (built): Supervisor routes to Genie space `nbo_performance`; ch
 Existing: SQL-vs-schema, bundle config, SDK signature, serving model contract, live workspace (skipped without creds). Run on 2026-11-24: **35 pass, 2 fail, 2 skipped** (`tests/test_app_sql.py:84` reads removed `app/app.py`; `tests/test_bundle_config.py:43` checks `command[-1]`="8000").
 Missing: story oracle as hard test (needs D2), app render/E2E test, agent eval, latency gate (needs D6).
 
-## 8. Security — OPEN D3, D4
+## 8. Security (D3, D4 decided: SP reads, agent acts within guardrails)
 Built: UC row filter + PII mask (`04_governance.py`), endpoint `CAN_QUERY` grant to app SP (`06:234-240`), secrets via `valueFrom` (`app/app.yaml`). Gaps: SP-only reads (C6), filter open to all (C5), no approver role check (C10), client-sent chat history passed to supervisor unvalidated (`app/server.py:273-279`).
 
-## 9. Resilience and scale — OPEN D6
+## 9. Resilience and scale (D6: measured, no hard gate)
 Claims without gates: "within a second", "~50 ms local", p50/p95 KPI (C9). No load target, no check-in rate.
 
 ## 10. Red-team (fillable)
@@ -128,15 +138,26 @@ Streamlit → React migration left stale tests (C12); stale online table recover
 - **P0b workspace:** dev workspace (`dbc-658a2a7c-0afe`, read 2026-11-24): endpoint `nbo-decision` **does not exist**; app **STOPPED** ("workspace or account status"); 15 tables from an older build (no `instore_events`, `offer_decisions`, `live_decision_log`, `offer_performance`, `agent_proposals`); no `nbo-demo-build` job; no Lakebase instances. `trial` (default target) not inspectable from here.
 - P1+ cannot be sequenced until D1.
 
-## 13. Coverage map — fillable after D1
+## 13. Coverage map
+| Capability | Status |
+|---|---|
+| Customer 360 features | Built (`member_features`) |
+| Real-time per-customer decision | Built (endpoint), not deployed in dev |
+| Agent proposes start/stop/scale | Built as proposals (`nbo_recommender`) |
+| Agent applies changes within guardrails | Not built: needs campaign state read by the decision path |
+| Dashboard of agent actions and impact | Not built: current pages are Executive, Real-time decisions, Is the model right? |
+| New campaigns invented by the agent | Not built; out of scope for first demo |
 
-## 14a. Owner decisions blocking completion
-1. **D1 Product scope:** P0 = live decision console (Acts 1–4), current finance/portfolio console, or both?
-2. **D2 Oracle:** exact numbers + tolerances; does step 3 fail the build on a miss?
-3. **D3 Identity/stack:** OBO or SP for reads; `open_to_all`; keep FastAPI+React or rebuild on AppKit; Zerobus/SDP in scope?
-4. **D4 Approval:** does approving change the live decision path, and who may approve?
-5. **D5 Workspace:** `trial` or `dev`; do the 6 groups, Lakebase, Model Serving, Agent Bricks exist there; push provider/topic; Genie space ID.
-6. **D6 Latency:** p95 targets for endpoint and app round trip, at what check-in rate.
+## 14a. Owner decisions
+1. **D1 Product scope — decided.** Agentic campaign demo (see *Demo concept*). Per-check-in decision and push are plumbing under it. The Acts 1–4 live console in the demo script is replaced.
+2. **D2 Oracle — decided.** Use `STORY_RANGES` (`src/nbo_lib.py:821-835`); step 3 fails the build on a miss. Add agent oracle: on the fixture, the agent pauses at least one program below the return target and scales the top program.
+3. **D3 Identity/stack — decided.** Keep FastAPI + React as built; reads as the app service principal; `open_to_all` stays on; Zerobus is talk track only.
+4. **D4 Approval — decided.** No approval queue. The agent applies changes within guardrails: budget cap, minimum offers before acting, auto-pause below the return target, maximum change per run. A human can revert.
+5. **D5 Workspace — OPEN.** `trial` or `dev`. Dev app is stopped for workspace/account status and has no endpoint or build job.
+6. **D6 Latency — decided.** Show measured latency from the inference table; no hard gate for the demo.
 
-## 15. Definition of done — needs D1, D2, D6
+## 15. Definition of done
+- `pytest` green, including the 2 stale tests fixed and a failing-on-miss story oracle.
+- From a clean build in the chosen workspace (D5): endpoint returns a per-shopper decision; agent run pauses at least one losing program and scales the top one; the decision endpoint honours the new campaign state; dashboard and app show those actions with reasons and impact; a human revert restores the prior state.
+- README, demo script, plan and `design/architecture.json` describe the same demo.
 

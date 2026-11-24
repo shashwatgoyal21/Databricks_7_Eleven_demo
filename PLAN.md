@@ -162,7 +162,7 @@ Gates to add:
 | Endpoint p95 under 200 ms at the load in A2, from the inference table | P3 |
 | Customer 360 with renamed columns trains and serves | P4 |
 
-CI: `.github/workflows/tests.yml` runs `pytest -q` on pull requests.
+CI: `.github/workflows/tests.yml` runs `pytest -q` on pull requests and pushes to main. Checked 2026-11-24: every run of it on main ends in `startup_failure` (runs 1, 23 and 31 at `7af2ef1`, `6566677`, `ceb8d85`) and this PR has no check runs, so the tests have never run in CI. Cause not investigated; P1 starts there.
 
 ## 8. Security
 - Reads as the app service principal (D3). Grants verified live: SELECT and USE SCHEMA on the schema, MODIFY on `agent_proposals`; endpoint `CAN_QUERY` (`06:234-240`). Secrets via `valueFrom` (`app/app.yaml`).
@@ -206,7 +206,7 @@ Streamlit to React left stale tests (C12). Stale online-table recovery is docume
 - 31 tables existed before the redeploy; the metric view makes 32 objects.
 - `dev` workspace (`dbc-658a2a7c-0afe`) is not the demo workspace and is out of scope.
 
-**P1, trust the numbers and the documents.** Run `bundle deploy -t trial` so the job gains the `recommender` task (C16). Story ranges for headline numbers plus a `story_checks` table, still non-failing (C11). Fix the two stale tests (C12). Read p95 from the inference table (C9). Assertion on the inference table after update (C8). Blank `GENIE_SPACE_ID` (C14). Canonical metric view and dashboard repoint (C7). Remove dead console code (C2). Rewrite README, demo script and design doc to this plan (C1, C3, C4). Provenance columns and a complete objects table. Screen text allowlist test. Decide what to do with workspace-only objects (C15). *Gate:* `pytest` green; step 3 prints no CHECK on a clean build; "Latency p95" shows a measured value; Ask Genie routes to "In-Store NBO Performance".
+**P1, trust the numbers and the documents.** Get the `tests` workflow to start (§7). Run `bundle deploy -t trial` so the job gains the `recommender` task (C16). Story ranges for headline numbers plus a `story_checks` table, still non-failing (C11). Fix the two stale tests (C12). Read p95 from the inference table (C9). Assertion on the inference table after update (C8). Blank `GENIE_SPACE_ID` (C14). Canonical metric view and dashboard repoint (C7). Remove dead console code (C2). Rewrite README, demo script and design doc to this plan (C1, C3, C4). Provenance columns and a complete objects table. Screen text allowlist test. Decide what to do with workspace-only objects (C15). *Gate:* `pytest` green; step 3 prints no CHECK on a clean build; "Latency p95" shows a measured value; Ask Genie routes to "In-Store NBO Performance".
 
 **P2, approvals take effect (D4).** Add `campaign_state` and adopt `offer_guardrails` in step 7. Approve writes `campaign_state` and a real `promotion_changes` row; Undo restores the prior row. The state is published to the online store with the same pattern as `member_features` and read in the endpoint's existing lookup; the decision path drops candidates for a paused program and region and applies `volume_scale`. A new model version is served. *Design spike first (RT-12):* confirm the scale-up rule in A3. *Gate:* approve "Pause Late-Night Energy in Texas", send fixed Texas check-ins, no PR05 offer within 2 minutes; Undo, and offers return.
 

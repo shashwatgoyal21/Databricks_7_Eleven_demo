@@ -1,7 +1,7 @@
 [
   {
     "name": "Offer Engine",
-    "story": "Customer 360 profiles feed a real-time decision endpoint that picks the best offer per shopper in milliseconds. A recommender scores every program, region and daypart and proposes changes ranked by profit, kept only if return on spend stays above the 10.1% target. The agent applies small changes within Unity Catalog limits and logs them with Undo; bigger moves wait for approval (D4 open). The app shows return on spend, recommendations and programs, with reports exported to EPM. No individual shoppers on screen.",
+    "story": "Customer 360 profiles feed a real-time decision endpoint that picks the best offer per shopper in milliseconds. A recommender scores every program and region and proposes changes ranked by profit, kept only if return on spend stays above the 10.1% target. The agent asks before changing any promotion; an approval changes which offers the endpoint sends, and Undo restores them. The app shows return on spend, recommendations and programs, with reports exported to EPM. No individual shoppers on screen.",
     "rowGrid": true,
     "columns": [
       "sources",
@@ -77,8 +77,8 @@
         "col": "c360",
         "row": 2,
         "label": "Lakebase",
-        "desc": "Profiles + live campaign state, by key",
-        "ai_reasoning": "Holds the online feature store and the campaign state the agent writes, so the endpoint reads both in milliseconds. Campaign state is planned (PLAN.md coverage map), not built yet."
+        "desc": "Profiles + campaign state, by key",
+        "ai_reasoning": "Online store nbo-online-store serves member_features and stores by key today. Campaign state joins it in P2 so the endpoint reads profile and state in one lookup. Campaign state is not built yet (PLAN.md section 12)."
       },
       {
         "id": "model-training",
@@ -110,7 +110,7 @@
         "col": "serving",
         "row": 2,
         "label": "Real-time decision",
-        "desc": "Best offer per shopper, in ms, or none"
+        "desc": "Best offer per shopper in ms, or none. Target p95 under 200 ms"
       },
       {
         "id": "sql-lakehouse",
@@ -120,15 +120,15 @@
         "desc": "Results, decisions, approvals, compute cost"
       },
       {
-        "id": "guardrails",
+        "id": "campaign-state",
         "type": "logo",
         "icon": "dbTable",
-        "text": "offer_guardrails",
+        "text": "campaign_state",
         "caption": "right",
         "col": "agent",
         "row": 2,
-        "desc": "Limits as UC functions: on/off, budget, caps, margin floor",
-        "ai_reasoning": "Table exists in the trial workspace (created 2026-11-21) but not in this repo; origin unconfirmed. P2 builds on it once confirmed."
+        "desc": "On/off and volume by program and region, changed only by approvals",
+        "ai_reasoning": "P2 in PLAN.md. New table written when a person approves a recommendation, restored by Undo, synced to the online store. offer_guardrails (5 rows, in the trial workspace, created by an earlier build job, not in the repo) is adopted as the limits table in the same phase."
       },
       {
         "id": "agent",
@@ -136,8 +136,8 @@
         "col": "agent",
         "row": 4,
         "label": "Offer agent",
-        "desc": "Acts within limits; big moves need approval",
-        "ai_reasoning": "Redesign plan + project thread: scale up/down by up to 20% and pause below 10.1% on its own, as UC governed functions with a log and Undo; new promotions and budget shifts wait for Approve/Reject. D4 open in PLAN.md."
+        "desc": "Proposes changes; asks before acting",
+        "ai_reasoning": "D4 in PLAN.md: the agent asks before changing any promotion; any workspace user can approve. Built today as proposals in agent_proposals with Approve, Reject and Undo. The approval does not yet change what the endpoint sends (P2)."
       },
       {
         "id": "app",
@@ -201,7 +201,7 @@
           "dashboard",
           "genie",
           "src-c360",
-          "guardrails"
+          "campaign-state"
         ]
       },
       {
@@ -234,9 +234,9 @@
         }
       },
       {
-        "id": "note-guardrails",
+        "id": "note-approval",
         "type": "note",
-        "text": "Agent acts alone within Unity Catalog limits (scale up to 20%, pause below 10.1%), every action logged with Undo. New promotions and budget shifts wait for Approve / Reject.",
+        "text": "The agent proposes; a person approves. An approved change updates campaign state that the endpoint reads on every check-in (P2). Undo restores it.",
         "below": "agent",
         "gap": 32
       },
@@ -245,6 +245,13 @@
         "type": "note",
         "text": "Two clocks: each shopper decision takes milliseconds; the agent changes campaigns from days of results.",
         "rightOf": "retailer-box",
+        "gap": 32
+      },
+      {
+        "id": "note-stream",
+        "type": "note",
+        "text": "Streaming ingest (Zerobus, live Lakeflow) is a talking point, not built. The demo replays check-ins from a table.",
+        "below": "lakeflow",
         "gap": 32
       },
       {
@@ -264,7 +271,7 @@
       {
         "id": "note-phases",
         "type": "note",
-        "text": "Built and live in trial: sample Customer 360, uplift model, real-time endpoint, recommender with Approve / Reject, app, dashboard, Genie. Next: P1 plug-in Customer 360 \u00b7 P2 approvals take effect, then agent autonomy \u00b7 P3 agent activity in the app.",
+        "text": "Built and live in trial (2026-11-24): sample Customer 360, uplift model, real-time endpoint, recommender with Approve / Reject / Undo, app, dashboard, Genie. Next: P1 trust the numbers and documents \u00b7 P2 approvals take effect \u00b7 P3 latency gate \u00b7 P4 plug-in Customer 360.",
         "below": "note-synthetic",
         "gap": 24
       },
@@ -399,8 +406,18 @@
       {
         "id": "e-agent-act",
         "from": "agent",
+        "to": "campaign-state",
+        "dashed": true,
+        "arrow": "end",
+        "label": "Approved change (P2)"
+      },
+      {
+        "id": "e-state-sync",
+        "from": "campaign-state",
         "to": "lakebase",
-        "label": "Start / stop / scale"
+        "dashed": true,
+        "arrow": "end",
+        "label": "Online sync (P2)"
       },
       {
         "id": "e-agent-log",
@@ -431,18 +448,6 @@
         "from": "sql-lakehouse",
         "to": "app",
         "flow": true
-      },
-      {
-        "id": "e-guard-set",
-        "from": "app",
-        "to": "guardrails",
-        "label": "Set limits"
-      },
-      {
-        "id": "e-guard-read",
-        "from": "guardrails",
-        "to": "agent",
-        "label": "Limits"
       },
       {
         "id": "e-epm",

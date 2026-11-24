@@ -135,7 +135,8 @@ Streamlit → React migration left stale tests (C12); stale online table recover
 
 ## 12. Phases and honest status
 - **P0a local:** build + app run locally; live console not built (C1-C2); 2 tests red.
-- **P0b workspace:** dev workspace (`dbc-658a2a7c-0afe`, read 2026-11-24): endpoint `nbo-decision` **does not exist**; app **STOPPED** ("workspace or account status"); 15 tables from an older build (no `instore_events`, `offer_decisions`, `live_decision_log`, `offer_performance`, `agent_proposals`); no `nbo-demo-build` job; no Lakebase instances. `trial` (default target) not inspectable from here.
+- **P0b workspace — `trial` (`dbc-8d181d91-4a82`, read 2026-11-24): live.** App `nbo-decision-engine` RUNNING (deployed 2026-11-23); endpoints `nbo-decision` and `nbo-next-best-offer` READY; warehouse `7b83e80f825c883f` RUNNING; job `[dev ali_chehab] nbo-demo-build` last run SUCCESS 2026-11-23 08:13 UTC; 31 tables in `workspace.nbo_demo` incl. `nbo_decision_payload`, `offer_decisions`, `live_decision_log`, `offer_performance`, `agent_proposals`; Genie spaces "In-Store NBO Performance" and "Promotion Performance"; dashboard "[dev ali_chehab] NBO Offer Engine". In the workspace but not in this repo: table `offer_guardrails` (`promotion_id, enabled, monthly_budget, frequency_cap_days, holdout_pct, margin_floor, updated_by, updated_at`, created 2026-11-21) and endpoint `nbo-next-best-offer`. No supervisor endpoint, no Lakebase database instances listed.
+- **`dev` (`dbc-658a2a7c-0afe`):** app stopped for workspace/account status; older build. Not the demo workspace.
 - P1+ cannot be sequenced until D1.
 
 ## 13. Coverage map
@@ -154,7 +155,7 @@ Streamlit → React migration left stale tests (C12); stale online table recover
 2. **D2 Oracle — decided.** Use `STORY_RANGES` (`src/nbo_lib.py:821-835`); step 3 fails the build on a miss. Add agent oracle: on the fixture, the agent pauses at least one program below the return target and scales the top program.
 3. **D3 Identity/stack — decided.** Keep FastAPI + React as built; reads as the app service principal; `open_to_all` stays on; Zerobus is talk track only.
 4. **D4 Approval — decided.** No approval queue. The agent applies changes within guardrails: budget cap, minimum offers before acting, auto-pause below the return target, maximum change per run. A human can revert.
-5. **D5 Workspace — decided.** Chosen with the customer at engagement. Until then the demo runs on the sample Customer 360 and synthetic data.
+5. **D5 Workspace — decided.** Demo builds and runs in `trial` (the bundle default, live). A customer deployment's workspace is chosen with the customer at engagement.
 6. **D6 Latency — decided.** Show measured latency from the inference table; no hard gate for the demo.
 
 ## 15. Definition of done

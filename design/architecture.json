@@ -1,0 +1,467 @@
+[
+  {
+    "name": "Offer Engine",
+    "story": "Customer 360 profiles feed a real-time decision endpoint that picks the best offer per shopper in milliseconds. A recommender scores every program and region and proposes changes ranked by profit, kept only if return on spend stays above the 10.1% target. The agent asks before changing any promotion; an approval changes which offers the endpoint sends, and Undo restores them. The app shows return on spend, recommendations and programs, with reports exported to EPM. No individual shoppers on screen.",
+    "rowGrid": true,
+    "columns": [
+      "sources",
+      "pipeline",
+      "c360",
+      "models",
+      "serving",
+      "agent",
+      "consume"
+    ],
+    "nodes": [
+      {
+        "id": "src-loyalty",
+        "type": "source",
+        "col": "sources",
+        "label": "Loyalty members",
+        "icon": "inputData",
+        "desc": "Profile, region, opt-ins"
+      },
+      {
+        "id": "src-pos",
+        "type": "source",
+        "col": "sources",
+        "label": "POS baskets",
+        "icon": "inputData",
+        "desc": "What each shopper buys"
+      },
+      {
+        "id": "src-offers",
+        "type": "source",
+        "col": "sources",
+        "label": "Offer history",
+        "icon": "inputData",
+        "desc": "Past offers and responses"
+      },
+      {
+        "id": "src-promos",
+        "type": "source",
+        "col": "sources",
+        "label": "Stores + promotions",
+        "icon": "inputData",
+        "desc": "120 stores, 5 offers"
+      },
+      {
+        "id": "src-c360",
+        "type": "source",
+        "col": "sources",
+        "label": "Your Customer 360",
+        "icon": "text",
+        "desc": "Optional: plug in instead of the sample",
+        "ai_reasoning": "P1 in PLAN.md. Points customer_360_table at the customer's table or a mapping view; not built yet."
+      },
+      {
+        "id": "lakeflow",
+        "type": "lakeflow-block",
+        "col": "pipeline",
+        "row": 0,
+        "params": {
+          "gold_desc": "Program results, offer outcomes"
+        }
+      },
+      {
+        "id": "c360",
+        "type": "feature-store",
+        "col": "c360",
+        "row": 0,
+        "label": "Customer 360",
+        "desc": "Yours plugged in, or the sample one"
+      },
+      {
+        "id": "lakebase",
+        "type": "lakebase",
+        "col": "c360",
+        "row": 2,
+        "label": "Lakebase",
+        "desc": "Profiles + campaign state, by key",
+        "ai_reasoning": "Online store nbo-online-store serves member_features and stores by key today. Campaign state joins it in P2 so the endpoint reads profile and state in one lookup. Campaign state is not built yet (PLAN.md section 12)."
+      },
+      {
+        "id": "model-training",
+        "type": "model-training",
+        "col": "models",
+        "row": 0,
+        "label": "Uplift model",
+        "desc": "Will this offer change what they buy?"
+      },
+      {
+        "id": "registry",
+        "type": "uc-model-registry",
+        "col": "models",
+        "row": 2,
+        "desc": "nbo_decision_service @prod"
+      },
+      {
+        "id": "recommender",
+        "type": "ml-model",
+        "col": "models",
+        "row": 4,
+        "label": "Recommender",
+        "desc": "Scores program x region x daypart, ranks by profit",
+        "ai_reasoning": "nbo_recommender (src/09_recommender.py); feeds the campaign agent's candidate actions."
+      },
+      {
+        "id": "model-serving",
+        "type": "model-serving",
+        "col": "serving",
+        "row": 2,
+        "label": "Real-time decision",
+        "desc": "Best offer per shopper in ms, or none. Target p95 under 200 ms"
+      },
+      {
+        "id": "sql-lakehouse",
+        "type": "sql-lakehouse",
+        "col": "serving",
+        "row": 4,
+        "desc": "Results, decisions, approvals, compute cost"
+      },
+      {
+        "id": "campaign-state",
+        "type": "logo",
+        "icon": "dbTable",
+        "text": "campaign_state",
+        "caption": "right",
+        "col": "agent",
+        "row": 2,
+        "desc": "On/off and volume by program and region, changed only by approvals",
+        "ai_reasoning": "P2 in PLAN.md. New table written when a person approves a recommendation, restored by Undo, synced to the online store. offer_guardrails (5 rows, in the trial workspace, created by an earlier build job, not in the repo) is adopted as the limits table in the same phase."
+      },
+      {
+        "id": "agent",
+        "type": "supervisor-agent",
+        "col": "agent",
+        "row": 4,
+        "label": "Offer agent",
+        "desc": "Proposes changes; asks before acting",
+        "ai_reasoning": "D4 in PLAN.md: the agent asks before changing any promotion; any workspace user can approve. Built today as proposals in agent_proposals with Approve, Reject and Undo. The approval does not yet change what the endpoint sends (P2)."
+      },
+      {
+        "id": "app",
+        "type": "databricks-apps-work",
+        "col": "consume",
+        "row": 0,
+        "label": "Offer Engine app",
+        "desc": "Overview, Recommendations, Programs, Reports, How it runs"
+      },
+      {
+        "id": "dashboard",
+        "type": "ai-bi-dashboard",
+        "col": "consume",
+        "row": 2,
+        "label": "NBO Offer Engine dashboard",
+        "desc": "Return on spend vs 10.1%, lift, margin"
+      },
+      {
+        "id": "genie",
+        "type": "genie",
+        "col": "consume",
+        "row": 4
+      },
+      {
+        "id": "db-platform",
+        "type": "db-platform",
+        "pin": {
+          "at": "top-left",
+          "to": "platform-box"
+        }
+      },
+      {
+        "id": "governance-block",
+        "type": "governance-block",
+        "pin": {
+          "at": "top-right",
+          "to": "platform-box"
+        },
+        "params": {
+          "genie_ontology": false
+        }
+      },
+      {
+        "id": "platform-box",
+        "type": "box",
+        "wraps": [
+          "src-loyalty",
+          "src-pos",
+          "src-offers",
+          "src-promos",
+          "lakeflow",
+          "c360",
+          "lakebase",
+          "model-training",
+          "registry",
+          "recommender",
+          "model-serving",
+          "sql-lakehouse",
+          "agent",
+          "app",
+          "dashboard",
+          "genie",
+          "src-c360",
+          "campaign-state"
+        ]
+      },
+      {
+        "id": "epm",
+        "type": "source",
+        "col": "consume",
+        "row": 7,
+        "label": "EPM (Anaplan / Jedox)",
+        "icon": "text",
+        "desc": "Finance plan export"
+      },
+      {
+        "id": "retailer",
+        "type": "source",
+        "col": "serving",
+        "row": 7,
+        "label": "Retailer app + push",
+        "icon": "file:persona/user",
+        "desc": "Shopper walks in; offer delivered"
+      },
+      {
+        "id": "retailer-box",
+        "type": "box",
+        "title": "Retailer stack (unchanged)",
+        "wraps": [
+          "retailer"
+        ],
+        "style": {
+          "borderStyle": "dashed"
+        }
+      },
+      {
+        "id": "note-approval",
+        "type": "note",
+        "text": "The agent proposes; a person approves. An approved change updates campaign state that the endpoint reads on every check-in (P2). Undo restores it.",
+        "below": "agent",
+        "gap": 32
+      },
+      {
+        "id": "note-speed",
+        "type": "note",
+        "text": "Two clocks: each shopper decision takes milliseconds; the agent changes campaigns from days of results.",
+        "rightOf": "retailer-box",
+        "gap": 32
+      },
+      {
+        "id": "note-stream",
+        "type": "note",
+        "text": "Streaming ingest (Zerobus, live Lakeflow) is a talking point, not built. The demo replays check-ins from a table.",
+        "below": "lakeflow",
+        "gap": 32
+      },
+      {
+        "id": "note-synthetic",
+        "type": "note",
+        "text": "All shoppers, stores and numbers are synthetic.",
+        "below": "src-promos",
+        "gap": 32
+      },
+      {
+        "id": "note-c360",
+        "type": "note",
+        "text": "Plug in an existing Customer 360: point customer_360_table at your table or a mapping view, list the feature columns, retrain. Training also needs past offers with a holdout.",
+        "above": "c360",
+        "gap": 32
+      },
+      {
+        "id": "note-phases",
+        "type": "note",
+        "text": "Built and live in trial (2026-11-24): sample Customer 360, uplift model, real-time endpoint, recommender with Approve / Reject / Undo, app, dashboard, Genie. Next: P1 trust the numbers and documents \u00b7 P2 approvals take effect \u00b7 P3 latency gate \u00b7 P4 plug-in Customer 360.",
+        "below": "note-synthetic",
+        "gap": 24
+      },
+      {
+        "id": "note-roic",
+        "type": "note",
+        "text": "Headline: return on spend vs the 10.1% target. Return = incremental margin; spend = discounts + Databricks compute (system.billing) + platform. No individual shoppers on any screen.",
+        "above": "app",
+        "gap": 32
+      },
+      {
+        "id": "note-metric-view",
+        "type": "note",
+        "text": "One metric view, nbo_offer_metrics, defines sales added, profit added, return on spend and acceptance for the app, dashboard and Genie.",
+        "below": "genie",
+        "gap": 32
+      }
+    ],
+    "edges": [
+      {
+        "id": "e-src1",
+        "from": "src-loyalty",
+        "to": "lakeflow@in-lakeflow-connect",
+        "flow": true
+      },
+      {
+        "id": "e-src2",
+        "from": "src-pos",
+        "to": "lakeflow@in-lakeflow-connect",
+        "flow": true
+      },
+      {
+        "id": "e-src3",
+        "from": "src-offers",
+        "to": "lakeflow@in-lakeflow-connect",
+        "flow": true
+      },
+      {
+        "id": "e-src4",
+        "from": "src-promos",
+        "to": "lakeflow@in-lakeflow-connect",
+        "flow": true
+      },
+      {
+        "id": "e-c360-plug",
+        "from": "src-c360",
+        "to": "c360",
+        "dashed": true,
+        "arrow": "end",
+        "label": "Plug in"
+      },
+      {
+        "id": "e-c360",
+        "from": "lakeflow",
+        "to": "c360",
+        "flow": true,
+        "label": "Build profiles"
+      },
+      {
+        "id": "e-online",
+        "from": "c360",
+        "to": "lakebase",
+        "flow": true,
+        "label": "Online sync"
+      },
+      {
+        "id": "e-train",
+        "from": "c360",
+        "to": "model-training",
+        "flow": true
+      },
+      {
+        "id": "e-register",
+        "from": "model-training",
+        "to": "registry",
+        "flow": true
+      },
+      {
+        "id": "e-load",
+        "from": "registry",
+        "to": "model-serving",
+        "flow": true,
+        "label": "@prod"
+      },
+      {
+        "id": "e-lookup",
+        "from": "lakebase",
+        "to": "model-serving",
+        "flow": true,
+        "label": "Profile + campaign state"
+      },
+      {
+        "id": "e-decide",
+        "from": "retailer",
+        "to": "model-serving",
+        "arrow": "both",
+        "label": "Check-in / offer"
+      },
+      {
+        "id": "e-inference",
+        "from": "model-serving",
+        "to": "sql-lakehouse",
+        "flow": true,
+        "label": "Every decision logged"
+      },
+      {
+        "id": "e-gold",
+        "from": "lakeflow",
+        "to": "sql-lakehouse",
+        "flow": true,
+        "label": "Results"
+      },
+      {
+        "id": "e-score-in",
+        "from": "sql-lakehouse",
+        "to": "recommender",
+        "flow": true
+      },
+      {
+        "id": "e-score-out",
+        "from": "recommender",
+        "to": "agent",
+        "label": "Forecast per action"
+      },
+      {
+        "id": "e-agent-read",
+        "from": "sql-lakehouse",
+        "to": "agent",
+        "flow": true,
+        "label": "Results"
+      },
+      {
+        "id": "e-agent-act",
+        "from": "agent",
+        "to": "campaign-state",
+        "dashed": true,
+        "arrow": "end",
+        "label": "Approved change (P2)"
+      },
+      {
+        "id": "e-state-sync",
+        "from": "campaign-state",
+        "to": "lakebase",
+        "dashed": true,
+        "arrow": "end",
+        "label": "Online sync (P2)"
+      },
+      {
+        "id": "e-agent-log",
+        "from": "agent",
+        "to": "sql-lakehouse",
+        "label": "Action log"
+      },
+      {
+        "id": "e-agent-genie",
+        "from": "agent",
+        "to": "genie",
+        "label": "Asks"
+      },
+      {
+        "id": "e-dash",
+        "from": "sql-lakehouse",
+        "to": "dashboard",
+        "flow": true
+      },
+      {
+        "id": "e-genie",
+        "from": "sql-lakehouse",
+        "to": "genie",
+        "flow": true
+      },
+      {
+        "id": "e-app",
+        "from": "sql-lakehouse",
+        "to": "app",
+        "flow": true
+      },
+      {
+        "id": "e-epm",
+        "from": "app",
+        "to": "epm",
+        "arrow": "end",
+        "label": "Export for EPM"
+      },
+      {
+        "id": "e-app-agent",
+        "from": "app",
+        "to": "agent",
+        "label": "Approve / Reject, ask, undo"
+      }
+    ]
+  }
+]

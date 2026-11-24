@@ -39,7 +39,7 @@ w = WorkspaceClient()
 AGENT = "NBO Offer Agent"
 SPACE_TITLE = "In-Store NBO Performance"
 TABLES = ["offer_performance", "promo_portfolio", "promotions", "promotion_changes", "agent_proposals",
-          "compute_cost"]
+          "compute_cost", "nbo_offer_metrics"]
 
 try:
     sp = w.apps.get(app_name).service_principal_client_id

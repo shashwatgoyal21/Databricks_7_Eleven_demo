@@ -62,4 +62,7 @@ def local_data(pipeline, tmp_path_factory):
     for name, df in {"promotions": raw["promotions"], "stores": raw["stores"],
                      "instore_events": raw["instore_events"], **gold}.items():
         df.to_parquet(out / f"{name}.parquet", index=False)
+    tables = {"promotions": raw["promotions"], "stores": raw["stores"], **gold}
+    nbo_lib.recommend_from_tables(tables, nbo_lib.DEFAULT_ASSUMPTIONS).to_csv(out / "agent_proposals.csv",
+                                                                              index=False)
     return out

@@ -1,6 +1,6 @@
-streamlit>=1.50,<2
+fastapi>=0.110
+uvicorn[standard]>=0.29
 databricks-sql-connector>=3.4
 databricks-sdk>=0.50
 pandas
 pyarrow
-altair

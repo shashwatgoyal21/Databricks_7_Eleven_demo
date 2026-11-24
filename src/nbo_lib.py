@@ -843,3 +843,246 @@ def story_checks(numbers):
             continue
         low, high = STORY_RANGES[label]
         print(f"[{'PASS' if low <= value <= high else 'CHECK'}] {label}: {value:,.3f}")
+
+
+# ---------------------------------------------------------------------------
+# Recommender: a trained model that proposes promotion changes
+# ---------------------------------------------------------------------------
+# One row per promotion x region x period with the net margin each offer earned, from the stored history
+# (promo_monthly: curated pilot Jan-Mar, send-to-all rules Apr-Sep) and the live day the decision engine
+# ran (offer_performance). A random forest learns net margin per offer from the offer's economics, region,
+# audience and targeting policy. It then scores what each program would earn under candidate changes
+# (pause, scale, move volume between regions); the spread across its trees sets the confidence.
+
+RECOMMENDER_NAME = "nbo_recommender"
+RECOMMENDER_FEATURES = ["unit_margin", "discount_cost", "discount_depth", "persuadable_share", "region_code",
+                        "policy_code"]
+POLICY_CODES = {"Static rules, all eligible (Apr-Sep)": 0, "Curated pilot (Jan-Mar)": 1, "Model targeted": 2}
+RECOMMENDER_REGIONS = ["California", "Florida", "Northeast", "Texas"]
+SCALE_STEP = 0.25      # share of current volume a Scale proposal adds
+SHIFT_STEP = 0.5       # share of the weaker region's volume a Move proposal shifts
+MAX_PROPOSALS = 5
+
+
+def recommender_training_frame(promo_monthly, offer_performance, promotions, promo_portfolio):
+    """Training rows for the recommender: features plus net margin per offer and the number of offers."""
+    promo = promotions.set_index("promotion_id")
+    share = (promo_portfolio.set_index("promotion_id").persuadable_members
+             / promo_portfolio.set_index("promotion_id").eligible_members.clip(lower=1))
+    hist = promo_monthly.assign(
+        offers=promo_monthly.sends,
+        net=promo_monthly.incremental_margin - promo_monthly.discount_cost,
+        policy_code=promo_monthly.send_policy.map(POLICY_CODES).fillna(0))
+    live = offer_performance.groupby(["promotion_id", "region"], as_index=False)[
+        ["offers_served", "incremental_margin", "discount_cost"]].sum()
+    live = live.assign(offers=live.offers_served, net=live.incremental_margin - live.discount_cost,
+                       policy_code=POLICY_CODES["Model targeted"])
+    rows = pd.concat([hist[["promotion_id", "region", "offers", "net", "policy_code"]],
+                      live[["promotion_id", "region", "offers", "net", "policy_code"]]], ignore_index=True)
+    disc = pd.concat([hist[["promotion_id", "offers", "discount_cost"]],
+                      live[["promotion_id", "offers", "discount_cost"]]]).groupby("promotion_id").sum()
+    rows = rows[rows.offers > 0].copy()
+    rows["net_per_offer"] = rows.net / rows.offers
+    rows["discount_per_offer"] = rows.promotion_id.map(disc.discount_cost / disc.offers.clip(lower=1))
+    return _recommender_features(rows, promo, share)
+
+
+def _recommender_features(rows, promo, share):
+    rows = rows.copy()
+    rows["unit_margin"] = rows.promotion_id.map(promo.unit_margin).astype(float)
+    rows["discount_cost"] = rows.promotion_id.map(promo.discount_cost).astype(float)
+    rows["discount_depth"] = rows.discount_cost / (rows.unit_margin + rows.discount_cost)
+    rows["persuadable_share"] = rows.promotion_id.map(share).fillna(0).astype(float)
+    rows["region_code"] = rows.region.map({r: i for i, r in enumerate(RECOMMENDER_REGIONS)}).fillna(-1)
+    return rows
+
+
+def train_recommender(frame, seed=7):
+    """Random forest on net margin per offer. Rows weighted by the square root of their offers, so the
+    months of history do not drown out the days the model-targeted engine ran."""
+    from sklearn.ensemble import RandomForestRegressor
+
+    m = RandomForestRegressor(n_estimators=300, min_samples_leaf=1, random_state=seed)
+    m.fit(frame[RECOMMENDER_FEATURES], frame.net_per_offer, sample_weight=np.sqrt(frame.offers))
+    return m
+
+
+def _predict_spread(model, X):
+    per_tree = np.stack([t.predict(X.values) for t in model.estimators_])
+    return per_tree.mean(axis=0), per_tree.std(axis=0)
+
+
+def _confidence(mu, sd, offers):
+    z = abs(mu) / max(sd, 1e-6)
+    if z >= 2 and offers >= 300:
+        return "High"
+    return "Medium" if z >= 1 else "Low"
+
+
+def _usd(x):
+    a = abs(x)
+    body = f"{a / 1e6:.1f}M" if a >= 1e6 else f"{a / 1e3:.0f}K" if a >= 1e3 else f"{a:,.2f}"
+    return ("-" if x < 0 else "") + "$" + body
+
+
+def recommend(model, frame, offer_performance, promotions, promo_portfolio, assumptions, pilot_stores,
+              live_days, model_version="1", scored_at=None):
+    """Score candidate changes for every promotion x region and return the top proposals as rows for
+    agent_proposals. Every number comes from the model or the stored tables."""
+    from datetime import datetime, timezone
+
+    scored_at = scored_at or datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+    today = scored_at[:10]
+    promo = promotions.set_index("promotion_id")
+    share = (promo_portfolio.set_index("promotion_id").persuadable_members
+             / promo_portfolio.set_index("promotion_id").eligible_members.clip(lower=1))
+    network = assumptions["network_stores"] / max(pilot_stores, 1)
+    gm, cannib, hurdle = (assumptions["promoted_item_gross_margin"], assumptions["cannibalization_rate"],
+                          assumptions["hurdle_rate"])
+
+    # Current yearly volume per promotion x region at network scale: the live day when the engine ran it,
+    # otherwise the last month of history
+    live = offer_performance.groupby(["promotion_id", "region"]).offers_served.sum() * 365 / max(live_days, 1)
+    last = frame[frame.policy_code < 2].sort_values("offers")
+    hist_month = frame[frame.policy_code == 0].groupby(["promotion_id", "region"]).offers.mean() * 12
+
+    cells = pd.DataFrame([(p, r) for p in promo.index for r in RECOMMENDER_REGIONS], columns=["promotion_id", "region"])
+    cells = _recommender_features(cells, promo, share)
+    running = [(c.promotion_id, c.region) in live.index and live[(c.promotion_id, c.region)] > 0
+               for c in cells.itertuples()]
+    cells["running_model"] = running
+    cells["offers_year"] = [
+        (live[(c.promotion_id, c.region)] if c.running_model else hist_month.get((c.promotion_id, c.region), 0.0))
+        * network for c in cells.itertuples()]
+    # predicted net margin per offer under the targeting policy in place today and under model targeting
+    cells["policy_code"] = np.where(cells.running_model, POLICY_CODES["Model targeted"], 0)
+    cells["mu"], cells["sd"] = _predict_spread(model, cells[RECOMMENDER_FEATURES])
+    cells["policy_code"] = POLICY_CODES["Model targeted"]
+    cells["mu_model"], cells["sd_model"] = _predict_spread(model, cells[RECOMMENDER_FEATURES])
+    support = frame.groupby(["promotion_id", "region"]).offers.sum()
+    cells["support"] = [support.get((c.promotion_id, c.region), 0) for c in cells.itertuples()]
+    cells["discount_per_offer"] = cells.promotion_id.map(
+        frame.groupby("promotion_id").discount_per_offer.first()).fillna(0)
+    del last
+
+    def sales(profit_delta, offers_delta, row):
+        # incremental margin moves with net margin plus the discount it carries; sales = margin / gross margin
+        margin = profit_delta + offers_delta * float(row.discount_per_offer)
+        return margin * (1 - cannib) / gm
+
+    out = []
+    for c in cells.itertuples():
+        name = promo.loc[c.promotion_id, "short_name"]
+        lo, hi = c.mu - c.sd, c.mu + c.sd
+        if c.offers_year <= 0:
+            continue
+        if not c.running_model:
+            # Sent by static rules today: what model targeting would earn on the persuadable share
+            targeted = c.offers_year * c.persuadable_share
+            profit = c.mu_model * targeted - c.mu * c.offers_year
+            if c.mu < 0 and c.persuadable_share < 0.05:  # nobody to target: stopping is the change
+                out.append(dict(promotion_id=c.promotion_id, region=c.region, action="pause", kind="Pause",
+                                title=f"Pause {name} in {c.region}",
+                                profit=-c.mu * c.offers_year, sales=-abs(sales(c.mu * c.offers_year, -c.offers_year, c)),
+                                confidence=_confidence(c.mu, c.sd, c.support),
+                                evidence=[f"Predicted net margin per offer, send-to-all: {_usd(c.mu)} "
+                                          f"(range {_usd(lo)} to {_usd(hi)})",
+                                          f"Persuadable share of eligible shoppers: {c.persuadable_share:.0%}",
+                                          f"Offers per year at network scale: {c.offers_year:,.0f}",
+                                          f"Training support: {c.support:,.0f} offers in {c.region}"],
+                                rollout=f"Stop sends in {c.region}; the control group confirms within 2 weeks"))
+            elif profit > 0:
+                out.append(dict(promotion_id=c.promotion_id, region=c.region, action="retarget", kind="Retarget",
+                                title=f"Switch {name} in {c.region} from send-to-all to model targeting",
+                                profit=profit, sales=sales(profit, targeted - c.offers_year, c),
+                                confidence=_confidence(c.mu_model - c.mu, float(np.hypot(c.sd, c.sd_model)), c.support),
+                                evidence=[f"Predicted net margin per offer, send-to-all: {_usd(c.mu)}",
+                                          f"Predicted net margin per offer, model targeted: {_usd(c.mu_model)}",
+                                          f"Offers per year: {c.offers_year:,.0f} today, {targeted:,.0f} targeted",
+                                          f"Training support: {c.support:,.0f} offers in {c.region}"],
+                                rollout=f"Targeted sends in 10% of {c.region} stores for 2 weeks against the "
+                                        f"control group, then all {c.region} stores"))
+            continue
+        if hi < 0:  # loses money even at the optimistic end
+            profit = -c.mu * c.offers_year
+            out.append(dict(promotion_id=c.promotion_id, region=c.region, action="pause", kind="Pause",
+                            title=f"Pause {name} in {c.region}",
+                            profit=profit, sales=-abs(sales(-profit, -c.offers_year, c)),
+                            confidence=_confidence(c.mu, c.sd, c.support),
+                            evidence=[f"Predicted net margin per offer: {_usd(c.mu)} (range {_usd(lo)} to {_usd(hi)})",
+                                      f"Offers per year at network scale: {c.offers_year:,.0f}",
+                                      f"Training support: {c.support:,.0f} offers in {c.region}"],
+                            rollout=f"Stop sends in {c.region}; the control group confirms within 2 weeks"))
+        elif lo > 0:
+            capital = c.offers_year * SCALE_STEP * float(c.discount_per_offer)
+            profit = c.mu * c.offers_year * SCALE_STEP
+            if capital > 0 and profit / capital >= hurdle:
+                out.append(dict(promotion_id=c.promotion_id, region=c.region, action="scale", kind="Scale",
+                                title=f"Scale {name} in {c.region} by {SCALE_STEP:.0%}",
+                                profit=profit, sales=sales(profit, c.offers_year * SCALE_STEP, c),
+                                confidence=_confidence(c.mu, c.sd, c.support),
+                                evidence=[f"Predicted net margin per offer: {_usd(c.mu)} (range {_usd(lo)} to {_usd(hi)})",
+                                          f"Predicted return on added spend: {profit / capital:.1%} vs target {hurdle:.1%}",
+                                          f"Training support: {c.support:,.0f} offers in {c.region}"],
+                                rollout=f"Add {SCALE_STEP:.0%} more sends in 10% of {c.region} stores for 2 weeks, "
+                                        f"then all {c.region} stores if return holds above {hurdle:.1%}"))
+    # Move volume from the weakest to the strongest region of each promotion
+    for pid, g in cells[(cells.offers_year > 0) & cells.running_model].groupby("promotion_id"):
+        if len(g) < 2:
+            continue
+        best, worst = g.loc[g.mu.idxmax()], g.loc[g.mu.idxmin()]
+        gap = best.mu - worst.mu
+        if gap <= float(np.hypot(best.sd, worst.sd)):
+            continue
+        moved = worst.offers_year * SHIFT_STEP
+        profit = gap * moved
+        name = promo.loc[pid, "short_name"]
+        out.append(dict(promotion_id=pid, region=f"{worst.region} to {best.region}", action="move", kind="Move volume",
+                        title=f"Move {SHIFT_STEP:.0%} of {name} volume from {worst.region} to {best.region}",
+                        profit=profit, sales=sales(profit, 0, best),
+                        confidence=_confidence(gap, float(np.hypot(best.sd, worst.sd)),
+                                               min(best.support, worst.support)),
+                        evidence=[f"Predicted net margin per offer: {best.region} {_usd(best.mu)}, "
+                                  f"{worst.region} {_usd(worst.mu)}",
+                                  f"Offers moved per year: {moved:,.0f}",
+                                  f"Training support: {best.support + worst.support:,.0f} offers"],
+                        rollout=f"Shift sends over 2 weeks; the control group in both regions measures the result"))
+    if not out:
+        return pd.DataFrame(columns=PROPOSAL_COLUMNS)
+    df = pd.DataFrame(out).sort_values("profit", ascending=False)
+    # the best change per promotion, best first
+    df = df.drop_duplicates("promotion_id").head(MAX_PROPOSALS)
+    import json
+
+    return pd.DataFrame({
+        "proposal_id": [f"{today}-{r.promotion_id}-{r.action}-{r.region}".replace(" ", "_") for r in df.itertuples()],
+        "proposal_date": today, "promotion_id": df.promotion_id.values, "kind": df.kind.values,
+        "title": df.title.values, "rationale": ["; ".join(e) for e in df.evidence],
+        "expected_monthly_impact_usd": (df.profit / 12).values, "status": "proposed",
+        "decided_by": None, "decided_at": None, "created_at": scored_at,
+        "region": df.region.values, "action": df.action.values,
+        "expected_annual_profit_usd": df.profit.values, "expected_annual_sales_usd": df.sales.values,
+        "confidence": df.confidence.values, "evidence": [json.dumps(e) for e in df.evidence],
+        "rollout": df.rollout.values, "model_name": RECOMMENDER_NAME, "model_version": str(model_version),
+        "scored_at": scored_at, "reject_reason": None,
+    })[PROPOSAL_COLUMNS]
+
+
+PROPOSAL_COLUMNS = ["proposal_id", "proposal_date", "promotion_id", "kind", "title", "rationale",
+                    "expected_monthly_impact_usd", "status", "decided_by", "decided_at", "created_at", "region",
+                    "action", "expected_annual_profit_usd", "expected_annual_sales_usd", "confidence", "evidence",
+                    "rollout", "model_name", "model_version", "scored_at", "reject_reason"]
+
+
+def recommend_from_tables(t, assumptions, model_version="local"):
+    """Train the recommender and score proposals from a dict of tables (local preview and tests)."""
+    perf = t["offer_performance"]
+    frame = recommender_training_frame(t["promo_monthly"], perf, t["promotions"], t["promo_portfolio"])
+    model = train_recommender(frame)
+    return recommend(model, frame, perf, t["promotions"], t["promo_portfolio"], assumptions,
+                     pilot_stores=len(t["stores"]), live_days=max(perf.decision_date.nunique(), 1),
+                     model_version=model_version)
+
+
+DEFAULT_ASSUMPTIONS = {"network_stores": 13000.0, "hurdle_rate": 0.101, "promoted_item_gross_margin": 0.45,
+                       "cannibalization_rate": 0.15, "platform_cost_annual": 2_000_000.0}

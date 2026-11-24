@@ -3,3 +3,4 @@ __pycache__/
 *.pyc
 .databricks/
 .pytest_cache/
+frontend/node_modules/

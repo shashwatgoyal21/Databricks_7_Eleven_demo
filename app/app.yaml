@@ -1,4 +1,4 @@
-command: ["streamlit", "run", "app.py"]
+command: ["uvicorn", "server:app", "--host", "0.0.0.0", "--port", "8000"]
 env:
   - name: DATABRICKS_WAREHOUSE_ID
     valueFrom: sql-warehouse
@@ -8,7 +8,7 @@ env:
     value: nbo-decision
   - name: NBO_BRAND
     value: "7-Eleven"
-  # Set once the Genie space exists. Empty = the Ask Genie tab shows setup help.
+  # Genie space behind Ask Genie (the build job also writes it to agent_config).
   - name: GENIE_SPACE_ID
     value: "01f1e5308ffc1e808a8898c1613b1654"
   # Push delivery through the retailer's existing stack (see README, "Push delivery").

@@ -51,7 +51,7 @@ def test_default_target_is_the_live_workspace():
 
 def test_app_requirements_cover_its_imports():
     reqs = (ROOT / "app" / "requirements.txt").read_text().lower()
-    for pkg in ["streamlit", "databricks-sql-connector", "databricks-sdk", "pandas"]:
+    for pkg in ["fastapi", "databricks-sql-connector", "databricks-sdk", "pandas"]:
         assert pkg in reqs
 
 

@@ -1,13 +1,13 @@
 # Agentic Next Best Offer — Implementation Plan
 
-> Status: **Concept defined 2026-11-24; 1 owner decision open (D5 workspace). Build not started.** Decisions in §14a.
+> Status: **Concept defined 2026-11-24. Build not started.** Workspace is chosen with the customer at engagement. Decisions in §14a.
 > Baseline: `chehaba/databricks-app` @ `ceb8d85` (main). Canonical intent today: `README.md` + `NBO - Demo Script.md` + `design/appkit-app-design.md` — these disagree with the shipped app (§0).
 > All shoppers, stores, numbers and the retailer brand are fictional.
 > Method: drafted from the repo + live dev workspace read-only checks; independently audited by an advisor (Plan agent). Every fact below is cited or marked OPEN.
 
 ## Demo concept (decided 2026-11-24)
 
-1. **Customer 360.** Every shopper has a profile from POS baskets, loyalty and past offer responses (`member_features`, keyed on `member_id`).
+1. **Customer 360 (pluggable).** The engine reads one Unity Catalog table or view, set by a bundle variable `customer_360_table`. It needs one row per customer, a customer ID key, and the feature columns listed in config. The demo ships a sample Customer 360 (today's `member_features`). A customer plugs in theirs by pointing the variable at their table, or at a mapping view over it. The uplift model is then retrained on their columns. Training also needs their past offers with a holdout (their equivalent of `offer_history`); the Customer 360 alone is not enough to learn uplift.
 2. **Real-time decision.** On each check-in, the `nbo-decision` endpoint picks the best offer for that shopper in milliseconds, or none. Automatic, no human. Push delivery stays with the retailer's stack and is not shown in the demo.
 3. **Campaign agent.** Watches results and starts, stops and scales offers on its own within guardrails. No approval queue; a human can revert. The decision endpoint reads the live campaign state on every check-in.
 4. **Dashboard.** Shows what the agent did (started, stopped, scaled), why, and the profit impact.
@@ -141,7 +141,8 @@ Streamlit → React migration left stale tests (C12); stale online table recover
 ## 13. Coverage map
 | Capability | Status |
 |---|---|
-| Customer 360 features | Built (`member_features`) |
+| Customer 360 features | Sample built (`member_features`) |
+| Plug in an existing Customer 360 | Not built: `customer_360_table` variable, feature-column config, retrain on their columns |
 | Real-time per-customer decision | Built (endpoint), not deployed in dev |
 | Agent proposes start/stop/scale | Built as proposals (`nbo_recommender`) |
 | Agent applies changes within guardrails | Not built: needs campaign state read by the decision path |
@@ -153,7 +154,7 @@ Streamlit → React migration left stale tests (C12); stale online table recover
 2. **D2 Oracle — decided.** Use `STORY_RANGES` (`src/nbo_lib.py:821-835`); step 3 fails the build on a miss. Add agent oracle: on the fixture, the agent pauses at least one program below the return target and scales the top program.
 3. **D3 Identity/stack — decided.** Keep FastAPI + React as built; reads as the app service principal; `open_to_all` stays on; Zerobus is talk track only.
 4. **D4 Approval — decided.** No approval queue. The agent applies changes within guardrails: budget cap, minimum offers before acting, auto-pause below the return target, maximum change per run. A human can revert.
-5. **D5 Workspace — OPEN.** `trial` or `dev`. Dev app is stopped for workspace/account status and has no endpoint or build job.
+5. **D5 Workspace — decided.** Chosen with the customer at engagement. Until then the demo runs on the sample Customer 360 and synthetic data.
 6. **D6 Latency — decided.** Show measured latency from the inference table; no hard gate for the demo.
 
 ## 15. Definition of done

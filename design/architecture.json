@@ -13,7 +13,7 @@
       { "id": "lakeflow", "type": "lakeflow-block", "col": "pipeline", "row": 0,
         "params": { "gold_desc": "Program results, offer outcomes" } },
 
-      { "id": "c360", "type": "feature-store", "col": "c360", "row": 0, "label": "Customer 360", "desc": "One profile per shopper (member_features)" },
+      { "id": "c360", "type": "feature-store", "col": "c360", "row": 0, "label": "Customer 360", "desc": "Yours plugged in, or the sample one" },
       { "id": "lakebase", "type": "lakebase", "col": "c360", "row": 2, "label": "Lakebase", "desc": "Profiles + live campaign state, by key",
         "ai_reasoning": "Holds the online feature store and the campaign state the agent writes, so the endpoint reads both in milliseconds. Campaign state is planned (PLAN.md coverage map), not built yet." },
 
@@ -44,7 +44,8 @@
 
       { "id": "note-guardrails", "type": "note", "text": "Guardrails, not approvals: budget cap, minimum offers before acting, auto-pause below the return target, limited change per run. A human can revert any action.", "below": "agent", "gap": 32 },
       { "id": "note-speed", "type": "note", "text": "Two clocks: each shopper decision takes milliseconds; the agent changes campaigns from days of results.", "rightOf": "retailer-box", "gap": 32 },
-      { "id": "note-synthetic", "type": "note", "text": "All shoppers, stores and numbers are synthetic.", "below": "src-promos", "gap": 32 }
+      { "id": "note-synthetic", "type": "note", "text": "All shoppers, stores and numbers are synthetic.", "below": "src-promos", "gap": 32 },
+      { "id": "note-c360", "type": "note", "text": "Plug in an existing Customer 360: point customer_360_table at your table or a mapping view, list the feature columns, retrain. Needs past offers with a holdout too.", "above": "c360", "gap": 32 }
     ],
     "edges": [
       { "id": "e-src1", "from": "src-loyalty", "to": "lakeflow@in-lakeflow-connect", "flow": true },

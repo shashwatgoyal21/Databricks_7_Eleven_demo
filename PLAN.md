@@ -134,10 +134,13 @@ Claims without gates: "within a second", "~50 ms local", p50/p95 KPI (C9). No lo
 Streamlit → React migration left stale tests (C12); stale online table recovery documented (README:108; `06:62-67`); config via bundle variables; shared decision module.
 
 ## 12. Phases and honest status
-- **P0a local:** build + app run locally; live console not built (C1-C2); 2 tests red.
+- **P0a local:** `local_run.py` builds the synthetic data and the app runs locally. `pytest` 35 pass, 2 fail (stale Streamlit-era tests). The demo script's live console is dropped (D1), so C1–C2 no longer block.
 - **P0b workspace — `trial` (`dbc-8d181d91-4a82`, read 2026-11-24): live.** App `nbo-decision-engine` RUNNING (deployed 2026-11-23); endpoints `nbo-decision` and `nbo-next-best-offer` READY; warehouse `7b83e80f825c883f` RUNNING; job `[dev ali_chehab] nbo-demo-build` last run SUCCESS 2026-11-23 08:13 UTC; 31 tables in `workspace.nbo_demo` incl. `nbo_decision_payload`, `offer_decisions`, `live_decision_log`, `offer_performance`, `agent_proposals`; Genie spaces "In-Store NBO Performance" and "Promotion Performance"; dashboard "[dev ali_chehab] NBO Offer Engine". In the workspace but not in this repo: table `offer_guardrails` (`promotion_id, enabled, monthly_budget, frequency_cap_days, holdout_pct, margin_floor, updated_by, updated_at`, created 2026-11-21) and endpoint `nbo-next-best-offer`. No supervisor endpoint, no Lakebase database instances listed.
 - **`dev` (`dbc-658a2a7c-0afe`):** app stopped for workspace/account status; older build. Not the demo workspace.
-- P1+ cannot be sequenced until D1.
+- **P1 — Pluggable Customer 360 (next).** `customer_360_table` bundle variable, feature columns from config, training and endpoint read that table; sample `member_features` stays the default. Gate: tests pass on the sample and on a renamed-column Customer 360; rebuild in `trial` and the endpoint still returns decisions.
+- **P2 — Agent applies campaign changes.** Campaign state (on/off, budget, caps, margin floor) read by the decision path on every check-in; the agent starts, stops and scales within guardrails; human revert. Builds on `offer_guardrails` in `trial` once its origin is confirmed. Gate: pausing a program stops its offers at the endpoint.
+- **P3 — Agent activity screens.** App and dashboard show what the agent started, stopped and scaled, why, and the profit impact.
+- **P4 — Hardening.** Step 3 fails the build on a story-number miss, stale tests fixed, README and demo script match the agentic concept.
 
 ## 13. Coverage map
 | Capability | Status |

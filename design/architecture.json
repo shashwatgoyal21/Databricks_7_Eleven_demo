@@ -1,7 +1,7 @@
 [
   {
-    "name": "Agentic Next Best Offer",
-    "story": "Customer 360 profiles feed a real-time decision endpoint that picks the best offer for each shopper in milliseconds. A campaign agent watches results and starts, stops and scales offers on its own within guardrails; the endpoint reads the live campaign state on every check-in. The dashboard and app show what the agent did, why, and the profit impact.",
+    "name": "Offer Engine",
+    "story": "Customer 360 profiles feed a real-time decision endpoint that picks the best offer per shopper in milliseconds. A recommender scores every program, region and daypart and proposes changes ranked by profit, kept only if return on spend stays above the 10.1% target. The agent applies small changes within Unity Catalog limits and logs them with Undo; bigger moves wait for approval (D4 open). The app shows return on spend, recommendations and programs, with reports exported to EPM. No individual shoppers on screen.",
     "rowGrid": true,
     "columns": [
       "sources",
@@ -100,8 +100,8 @@
         "type": "ml-model",
         "col": "models",
         "row": 4,
-        "label": "Program scorer",
-        "desc": "Forecasts profit per offer, region, change",
+        "label": "Recommender",
+        "desc": "Scores program x region x daypart, ranks by profit",
         "ai_reasoning": "nbo_recommender (src/09_recommender.py); feeds the campaign agent's candidate actions."
       },
       {
@@ -117,7 +117,7 @@
         "type": "sql-lakehouse",
         "col": "serving",
         "row": 4,
-        "desc": "Results, decisions, agent actions"
+        "desc": "Results, decisions, approvals, compute cost"
       },
       {
         "id": "guardrails",
@@ -127,7 +127,7 @@
         "caption": "right",
         "col": "agent",
         "row": 2,
-        "desc": "On/off, budget, caps, margin floor per offer",
+        "desc": "Limits as UC functions: on/off, budget, caps, margin floor",
         "ai_reasoning": "Table exists in the trial workspace (created 2026-11-21) but not in this repo; origin unconfirmed. P2 builds on it once confirmed."
       },
       {
@@ -135,25 +135,25 @@
         "type": "supervisor-agent",
         "col": "agent",
         "row": 4,
-        "label": "Campaign Agent",
-        "desc": "Starts, stops, scales offers on its own",
-        "ai_reasoning": "D4: no approval queue; acts within guardrails; human can revert. Agent acting is planned, not built (today it only answers questions and the scorer only proposes)."
+        "label": "Offer agent",
+        "desc": "Acts within limits; big moves need approval",
+        "ai_reasoning": "Redesign plan + project thread: scale up/down by up to 20% and pause below 10.1% on its own, as UC governed functions with a log and Undo; new promotions and budget shifts wait for Approve/Reject. D4 open in PLAN.md."
       },
       {
         "id": "app",
         "type": "databricks-apps-work",
         "col": "consume",
         "row": 0,
-        "label": "Offer agent app",
-        "desc": "Agent activity, guardrails, revert, customer 360"
+        "label": "Offer Engine app",
+        "desc": "Overview, Recommendations, Programs, Reports, How it runs"
       },
       {
         "id": "dashboard",
         "type": "ai-bi-dashboard",
         "col": "consume",
         "row": 2,
-        "label": "Campaign dashboard",
-        "desc": "Started, stopped, scaled, and the profit impact"
+        "label": "NBO Offer Engine dashboard",
+        "desc": "Return on spend vs 10.1%, lift, margin"
       },
       {
         "id": "genie",
@@ -205,6 +205,15 @@
         ]
       },
       {
+        "id": "epm",
+        "type": "source",
+        "col": "consume",
+        "row": 7,
+        "label": "EPM (Anaplan / Jedox)",
+        "icon": "text",
+        "desc": "Finance plan export"
+      },
+      {
         "id": "retailer",
         "type": "source",
         "col": "serving",
@@ -227,7 +236,7 @@
       {
         "id": "note-guardrails",
         "type": "note",
-        "text": "Guardrails, not approvals: budget cap, minimum offers before acting, auto-pause below the return target, limited change per run. A human can revert any action.",
+        "text": "Agent acts alone within Unity Catalog limits (scale up to 20%, pause below 10.1%), every action logged with Undo. New promotions and budget shifts wait for Approve / Reject.",
         "below": "agent",
         "gap": 32
       },
@@ -255,9 +264,23 @@
       {
         "id": "note-phases",
         "type": "note",
-        "text": "Built and live in trial: sample Customer 360, uplift model, real-time endpoint, program scorer proposals, app, dashboard, Genie. Next: P1 plug-in Customer 360 \u00b7 P2 agent applies changes \u00b7 P3 agent activity screens.",
+        "text": "Built and live in trial: sample Customer 360, uplift model, real-time endpoint, recommender with Approve / Reject, app, dashboard, Genie. Next: P1 plug-in Customer 360 \u00b7 P2 approvals take effect, then agent autonomy \u00b7 P3 agent activity in the app.",
         "below": "note-synthetic",
         "gap": 24
+      },
+      {
+        "id": "note-roic",
+        "type": "note",
+        "text": "Headline: return on spend vs the 10.1% target. Return = incremental margin; spend = discounts + Databricks compute (system.billing) + platform. No individual shoppers on any screen.",
+        "above": "app",
+        "gap": 32
+      },
+      {
+        "id": "note-metric-view",
+        "type": "note",
+        "text": "One metric view, nbo_offer_metrics, defines sales added, profit added, return on spend and acceptance for the app, dashboard and Genie.",
+        "below": "genie",
+        "gap": 32
       }
     ],
     "edges": [
@@ -422,10 +445,17 @@
         "label": "Limits"
       },
       {
+        "id": "e-epm",
+        "from": "app",
+        "to": "epm",
+        "arrow": "end",
+        "label": "Export for EPM"
+      },
+      {
         "id": "e-app-agent",
         "from": "app",
         "to": "agent",
-        "label": "Ask, revert"
+        "label": "Approve / Reject, ask, undo"
       }
     ]
   }

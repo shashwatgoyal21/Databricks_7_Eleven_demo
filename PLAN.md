@@ -1,28 +1,31 @@
 # Agentic Next Best Offer — Implementation Plan
 
 > Status: **Concept defined 2026-11-24. Build not started.** Workspace is chosen with the customer at engagement. Decisions in §14a.
-> Baseline: `chehaba/databricks-app` @ `ceb8d85` (main). Canonical intent today: `README.md` + `NBO - Demo Script.md` + `design/appkit-app-design.md` — these disagree with the shipped app (§0).
+> Baseline: `chehaba/databricks-app` @ `ceb8d85` (main). Canonical intent: the *Offer Engine App: Redesign Plan* doc (DATABRICKS 7-11 project, 2026-11-24), which the app at `ceb8d85` implements. `README.md`, `NBO - Demo Script.md` and `design/appkit-app-design.md` predate it and are stale (§0).
 > All shoppers, stores, numbers and the retailer brand are fictional.
 > Method: drafted from the repo + live dev workspace read-only checks; independently audited by an advisor (Plan agent). Every fact below is cited or marked OPEN.
 
-## Demo concept (decided 2026-11-24)
+## Demo concept (decided 2026-11-24, reconciled with the redesign plan)
 
-1. **Customer 360 (pluggable).** The engine reads one Unity Catalog table or view, set by a bundle variable `customer_360_table`. It needs one row per customer, a customer ID key, and the feature columns listed in config. The demo ships a sample Customer 360 (today's `member_features`). A customer plugs in theirs by pointing the variable at their table, or at a mapping view over it. The uplift model is then retrained on their columns. Training also needs their past offers with a holdout (their equivalent of `offer_history`); the Customer 360 alone is not enough to learn uplift.
-2. **Real-time decision.** On each check-in, the `nbo-decision` endpoint picks the best offer for that shopper in milliseconds, or none. Automatic, no human. Push delivery stays with the retailer's stack and is not shown in the demo.
-3. **Campaign agent.** Watches results and starts, stops and scales offers on its own within guardrails. No approval queue; a human can revert. The decision endpoint reads the live campaign state on every check-in.
-4. **Dashboard.** Shows what the agent did (started, stopped, scaled), why, and the profit impact.
+1. **Headline metric: return on spend (ROIC) against the 10.1% target.** Return = incremental margin; spend = discounts + Databricks compute (from `system.billing`) + platform cost. Shown per program and for the whole pilot, scaled to the network with `finance_assumptions`.
+2. **No individual shoppers on any screen.** Customer 360 profiles drive the model behind the scenes; screens show programs, regions, dayparts and segments only.
+3. **Customer 360 (pluggable).** The engine reads one Unity Catalog table or view, set by a bundle variable `customer_360_table`: one row per customer, a customer ID key, and the feature columns listed in config. The demo ships a sample (`member_features`). A customer points the variable at their table or a mapping view, and the uplift model is retrained on their columns. Training also needs their past offers with a holdout.
+4. **Real-time decision.** On each check-in, `nbo-decision` picks the best offer for that shopper in milliseconds, or none. Automatic. Push delivery stays with the retailer's stack and is not shown.
+5. **Agent.** The recommender model (`nbo_recommender`) scores every program × region × daypart and proposes scale, pause, retarget and move-volume changes, ranked by profit and kept only if return stays above 10.1%. **OPEN D4:** which of those it applies on its own (see §14a).
+6. **App (as built at `ceb8d85`, per the redesign plan).** Overview · Recommendations · Offer programs · Reports (AI/BI dashboard + Finance report + Export for EPM) · How it runs, plus a floating Ask Genie. Light by default, dark toggle, brand colours unchanged.
+7. **Integration, not standalone.** Retailer app calls the endpoint; retailer push stack delivers; results in governed tables; plan exported to EPM (Anaplan / Jedox file).
 
 ## 0. Concept contradictions found (verified)
 
 | # | Concept says | Code does | Evidence |
 |---|---|---|---|
-| C1 | App = live engineer console: In-Store Live, Decision Trace, Under the Hood, Does the Model Work? | App = finance/portfolio console: Overview, Recommendations, Offer programs, Reports, How it runs + Genie drawer | Demo Script:64-94; `frontend/src/App.jsx:6-12` |
+| C1 | Demo script: live engineer console (In-Store Live, Decision Trace, …) | App follows the newer redesign plan (Overview, Recommendations, Offer programs, Reports, How it runs). **Resolved:** the demo script is stale; in-store live screen is out of scope per the redesign plan | Demo Script:64-94; `frontend/src/App.jsx:6-12` |
 | C2 | App sends check-ins to `nbo-decision`, logs to `live_decision_log`, sends real pushes | `call_decision_service`, `log_decisions`, `push.send` defined, never called; no route | `app/data.py:225,260`; `app/push.py:74`; `app/server.py` |
 | C3 | "1 in 10 check-ins gets no offer" | Holdout = `event_id % 10` among offer candidates (~2% of check-ins) | Demo Script:31,48; `app/nbo_decision.py:197` |
 | C4 | Lakeflow keeps `member_features` fresh; Zerobus ingest | No SDP pipeline, no Zerobus code; features built once; step 5 is one `availableNow` run reading batch scores, not the online store | `src/05_stream_decisions.py:63`; Demo Script:85 |
 | C5 | Governance demo: Texas-only user sees Texas | `open_to_all=true` default → row filter passes all account users; also grants MODIFY on `live_decision_log` to all | `src/04_governance.py:20,93,138` |
 | C6 | Reads governed per viewer (design: `*.obo.sql`) | All queries run as app service principal | `app/data.py:42-51`; `design/appkit-app-design.md:27` |
-| C7 | One metric view | Dashboard uses `metrics_promotions`; Genie space from step 8 uses `nbo_offer_metrics`; `genie/genie_space.md` lists a third table set | `src/08_agent.py:41-42`; `genie/genie_space.md:9-14` |
+| C7 | One metric view (redesign plan: `nbo_offer_metrics`, read by app, dashboard and Genie) | Dashboard uses `metrics_promotions`; Genie space from step 8 uses `nbo_offer_metrics`; `genie/genie_space.md` lists a third table set | `src/08_agent.py:41-42`; `genie/genie_space.md:9-14` |
 | C8 | Every request logged to inference table | Only on create; update path drops `ai_gateway` | `src/06_serve_decisions.py:214-215` |
 | C9 | p95 round trip shown | Reads `live_decision_log.latency_ms`, which nothing writes → always null | `app/server.py:216-218` |
 | C10 | Approving a recommendation changes targeting | Approval appends `promotion_changes`; nothing in the decision path reads it; no approver role check | `app/agent.py:90-125` |
@@ -101,7 +104,7 @@ Layer responsibilities: raw (`stores`, `loyalty_members`, `pos_baskets`, `promot
 - Quality check: `story_checks` (non-failing — C11).
 
 ## 6. Application and agent design
-**Target (D1):** screens = Agent activity (what it started, stopped, scaled, why, impact) · Programs (status, return vs target) · Customer 360 (one shopper's profile and the offer they'd get now) · Ask the agent. Guardrails shown and editable by a human; Revert on every agent action.
+**Target:** the five screens of the redesign plan (concept item 6). Additions from this session, pending D4: an agent activity log (what it changed on its own, why, impact, Undo) and the guardrails it acts within. No per-shopper screen.
 
 As built:
 Built: 5 tabs + Genie drawer (`App.jsx`). Designed: 4 screens + routes `POST /api/checkin`, `POST /api/decision-log` (`design/appkit-app-design.md:13-28`).
@@ -111,7 +114,7 @@ Agent boundaries (built): Supervisor routes to Genie space `nbo_performance`; ch
 Existing: SQL-vs-schema, bundle config, SDK signature, serving model contract, live workspace (skipped without creds). Run on 2026-11-24: **35 pass, 2 fail, 2 skipped** (`tests/test_app_sql.py:84` reads removed `app/app.py`; `tests/test_bundle_config.py:43` checks `command[-1]`="8000").
 Missing: story oracle as hard test (needs D2), app render/E2E test, agent eval, latency gate (needs D6).
 
-## 8. Security (D3, D4 decided: SP reads, agent acts within guardrails)
+## 8. Security (D3 decided: SP reads; D4 open)
 Built: UC row filter + PII mask (`04_governance.py`), endpoint `CAN_QUERY` grant to app SP (`06:234-240`), secrets via `valueFrom` (`app/app.yaml`). Gaps: SP-only reads (C6), filter open to all (C5), no approver role check (C10), client-sent chat history passed to supervisor unvalidated (`app/server.py:273-279`).
 
 ## 9. Resilience and scale (D6: measured, no hard gate)
@@ -138,8 +141,8 @@ Streamlit → React migration left stale tests (C12); stale online table recover
 - **P0b workspace — `trial` (`dbc-8d181d91-4a82`, read 2026-11-24): live.** App `nbo-decision-engine` RUNNING (deployed 2026-11-23); endpoints `nbo-decision` and `nbo-next-best-offer` READY; warehouse `7b83e80f825c883f` RUNNING; job `[dev ali_chehab] nbo-demo-build` last run SUCCESS 2026-11-23 08:13 UTC; 31 tables in `workspace.nbo_demo` incl. `nbo_decision_payload`, `offer_decisions`, `live_decision_log`, `offer_performance`, `agent_proposals`; Genie spaces "In-Store NBO Performance" and "Promotion Performance"; dashboard "[dev ali_chehab] NBO Offer Engine". In the workspace but not in this repo: table `offer_guardrails` (`promotion_id, enabled, monthly_budget, frequency_cap_days, holdout_pct, margin_floor, updated_by, updated_at`, created 2026-11-21) and endpoint `nbo-next-best-offer`. No supervisor endpoint, no Lakebase database instances listed.
 - **`dev` (`dbc-658a2a7c-0afe`):** app stopped for workspace/account status; older build. Not the demo workspace.
 - **P1 — Pluggable Customer 360 (next).** `customer_360_table` bundle variable, feature columns from config, training and endpoint read that table; sample `member_features` stays the default. Gate: tests pass on the sample and on a renamed-column Customer 360; rebuild in `trial` and the endpoint still returns decisions.
-- **P2 — Agent applies campaign changes.** Campaign state (on/off, budget, caps, margin floor) read by the decision path on every check-in; the agent starts, stops and scales within guardrails; human revert. Builds on `offer_guardrails` in `trial` once its origin is confirmed. Gate: pausing a program stops its offers at the endpoint.
-- **P3 — Agent activity screens.** App and dashboard show what the agent started, stopped and scaled, why, and the profit impact.
+- **P2 — Approvals take effect, then agent autonomy.** Campaign state (on/off, budget, caps, margin floor) read by the decision path on every check-in, so an approved change actually changes offers. Then autonomous actions within limits as Unity Catalog functions, with a log and Undo (scope per D4). Builds on `offer_guardrails` in `trial` once its origin is confirmed. Gate: pausing a program stops its offers at the endpoint.
+- **P3 — Agent activity in the app.** Log of what the agent changed, why, and the profit impact, inside the existing Overview / Recommendations; dashboard repointed to `nbo_offer_metrics`.
 - **P4 — Hardening.** Step 3 fails the build on a story-number miss, stale tests fixed, README and demo script match the agentic concept.
 
 ## 13. Coverage map
@@ -150,14 +153,18 @@ Streamlit → React migration left stale tests (C12); stale online table recover
 | Real-time per-customer decision | Built (endpoint), not deployed in dev |
 | Agent proposes start/stop/scale | Built as proposals (`nbo_recommender`) |
 | Agent applies changes within guardrails | Not built: needs campaign state read by the decision path |
-| Dashboard of agent actions and impact | Not built: current pages are Executive, Real-time decisions, Is the model right? |
+| Return on spend vs 10.1%, per program | Built (Overview, Offer programs) |
+| Recommendations with Approve / Reject / Undo | Built (`agent_proposals`, `promotion_changes`) |
+| Canonical metric view `nbo_offer_metrics` | Built by step 9; dashboard still reads `metrics_promotions` |
+| Export for EPM | Built (`/api/reports/epm.csv`) |
+| Agent activity log of autonomous actions | Not built (pending D4) |
 | New campaigns invented by the agent | Not built; out of scope for first demo |
 
 ## 14a. Owner decisions
 1. **D1 Product scope — decided.** Agentic campaign demo (see *Demo concept*). Per-check-in decision and push are plumbing under it. The Acts 1–4 live console in the demo script is replaced.
-2. **D2 Oracle — decided.** Use `STORY_RANGES` (`src/nbo_lib.py:821-835`); step 3 fails the build on a miss. Add agent oracle: on the fixture, the agent pauses at least one program below the return target and scales the top program.
+2. **D2 Oracle — decided.** Use `STORY_RANGES` (`src/nbo_lib.py:821-835`); step 3 fails the build on a miss. Add: pilot return on spend vs 10.1% computed from `offer_performance` + `compute_cost` + `finance_assumptions`; agent pauses at least one program below 10.1% and scales the top program.
 3. **D3 Identity/stack — decided.** Keep FastAPI + React as built; reads as the app service principal; `open_to_all` stays on; Zerobus is talk track only.
-4. **D4 Approval — decided.** No approval queue. The agent applies changes within guardrails: budget cap, minimum offers before acting, auto-pause below the return target, maximum change per run. A human can revert.
+4. **D4 Approval — OPEN (conflict).** Project thread and redesign plan: agent acts alone within limits (scale up/down by up to 20%, pause anything below 10.1%), enforced as Unity Catalog governed functions, every action logged with Undo; bigger moves (new promotions, budget shifts) wait for Approve/Reject. This session: "I don't know if a human should really approve at all." Recommendation: keep the hybrid; it satisfies both.
 5. **D5 Workspace — decided.** Demo builds and runs in `trial` (the bundle default, live). A customer deployment's workspace is chosen with the customer at engagement.
 6. **D6 Latency — decided.** Show measured latency from the inference table; no hard gate for the demo.
 

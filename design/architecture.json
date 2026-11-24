@@ -3,78 +3,430 @@
     "name": "Agentic Next Best Offer",
     "story": "Customer 360 profiles feed a real-time decision endpoint that picks the best offer for each shopper in milliseconds. A campaign agent watches results and starts, stops and scales offers on its own within guardrails; the endpoint reads the live campaign state on every check-in. The dashboard and app show what the agent did, why, and the profit impact.",
     "rowGrid": true,
-    "columns": ["sources", "pipeline", "c360", "models", "serving", "agent", "consume"],
+    "columns": [
+      "sources",
+      "pipeline",
+      "c360",
+      "models",
+      "serving",
+      "agent",
+      "consume"
+    ],
     "nodes": [
-      { "id": "src-loyalty", "type": "source", "col": "sources", "label": "Loyalty members", "icon": "inputData", "desc": "Profile, region, opt-ins" },
-      { "id": "src-pos", "type": "source", "col": "sources", "label": "POS baskets", "icon": "inputData", "desc": "What each shopper buys" },
-      { "id": "src-offers", "type": "source", "col": "sources", "label": "Offer history", "icon": "inputData", "desc": "Past offers and responses" },
-      { "id": "src-promos", "type": "source", "col": "sources", "label": "Stores + promotions", "icon": "inputData", "desc": "120 stores, 5 offers" },
-
-      { "id": "lakeflow", "type": "lakeflow-block", "col": "pipeline", "row": 0,
-        "params": { "gold_desc": "Program results, offer outcomes" } },
-
-      { "id": "c360", "type": "feature-store", "col": "c360", "row": 0, "label": "Customer 360", "desc": "Yours plugged in, or the sample one" },
-      { "id": "lakebase", "type": "lakebase", "col": "c360", "row": 2, "label": "Lakebase", "desc": "Profiles + live campaign state, by key",
-        "ai_reasoning": "Holds the online feature store and the campaign state the agent writes, so the endpoint reads both in milliseconds. Campaign state is planned (PLAN.md coverage map), not built yet." },
-
-      { "id": "model-training", "type": "model-training", "col": "models", "row": 0, "label": "Uplift model", "desc": "Will this offer change what they buy?" },
-      { "id": "registry", "type": "uc-model-registry", "col": "models", "row": 2, "desc": "nbo_decision_service @prod" },
-      { "id": "recommender", "type": "ml-model", "col": "models", "row": 4, "label": "Program scorer", "desc": "Forecasts profit per offer, region, change",
-        "ai_reasoning": "nbo_recommender (src/09_recommender.py); feeds the campaign agent's candidate actions." },
-
-      { "id": "model-serving", "type": "model-serving", "col": "serving", "row": 2, "label": "Real-time decision", "desc": "Best offer per shopper, in ms, or none" },
-      { "id": "sql-lakehouse", "type": "sql-lakehouse", "col": "serving", "row": 4, "desc": "Results, decisions, agent actions" },
-
-      { "id": "agent", "type": "supervisor-agent", "col": "agent", "row": 4, "label": "Campaign Agent", "desc": "Starts, stops, scales offers on its own",
-        "ai_reasoning": "D4: no approval queue; acts within guardrails; human can revert. Agent acting is planned, not built (today it only answers questions and the scorer only proposes)." },
-
-      { "id": "app", "type": "databricks-apps-work", "col": "consume", "row": 0, "label": "Offer agent app", "desc": "Agent activity, guardrails, revert, customer 360" },
-      { "id": "dashboard", "type": "ai-bi-dashboard", "col": "consume", "row": 2, "label": "Campaign dashboard", "desc": "Started, stopped, scaled, and the profit impact" },
-      { "id": "genie", "type": "genie", "col": "consume", "row": 4 },
-
-      { "id": "db-platform", "type": "db-platform", "pin": { "at": "top-left", "to": "platform-box" } },
-      { "id": "governance-block", "type": "governance-block", "pin": { "at": "top-right", "to": "platform-box" },
-        "params": { "genie_ontology": false } },
-
-      { "id": "platform-box", "type": "box",
-        "wraps": ["src-loyalty", "src-pos", "src-offers", "src-promos", "lakeflow", "c360", "lakebase", "model-training", "registry", "recommender", "model-serving", "sql-lakehouse", "agent", "app", "dashboard", "genie"] },
-
-      { "id": "retailer", "type": "source", "col": "serving", "row": 7, "label": "Retailer app + push", "icon": "file:persona/user", "desc": "Shopper walks in; offer delivered" },
-      { "id": "retailer-box", "type": "box", "title": "Retailer stack (unchanged)", "wraps": ["retailer"], "style": { "borderStyle": "dashed" } },
-
-      { "id": "note-guardrails", "type": "note", "text": "Guardrails, not approvals: budget cap, minimum offers before acting, auto-pause below the return target, limited change per run. A human can revert any action.", "below": "agent", "gap": 32 },
-      { "id": "note-speed", "type": "note", "text": "Two clocks: each shopper decision takes milliseconds; the agent changes campaigns from days of results.", "rightOf": "retailer-box", "gap": 32 },
-      { "id": "note-synthetic", "type": "note", "text": "All shoppers, stores and numbers are synthetic.", "below": "src-promos", "gap": 32 },
-      { "id": "note-c360", "type": "note", "text": "Plug in an existing Customer 360: point customer_360_table at your table or a mapping view, list the feature columns, retrain. Needs past offers with a holdout too.", "above": "c360", "gap": 32 }
+      {
+        "id": "src-loyalty",
+        "type": "source",
+        "col": "sources",
+        "label": "Loyalty members",
+        "icon": "inputData",
+        "desc": "Profile, region, opt-ins"
+      },
+      {
+        "id": "src-pos",
+        "type": "source",
+        "col": "sources",
+        "label": "POS baskets",
+        "icon": "inputData",
+        "desc": "What each shopper buys"
+      },
+      {
+        "id": "src-offers",
+        "type": "source",
+        "col": "sources",
+        "label": "Offer history",
+        "icon": "inputData",
+        "desc": "Past offers and responses"
+      },
+      {
+        "id": "src-promos",
+        "type": "source",
+        "col": "sources",
+        "label": "Stores + promotions",
+        "icon": "inputData",
+        "desc": "120 stores, 5 offers"
+      },
+      {
+        "id": "src-c360",
+        "type": "source",
+        "col": "sources",
+        "label": "Your Customer 360",
+        "icon": "text",
+        "desc": "Optional: plug in instead of the sample",
+        "ai_reasoning": "P1 in PLAN.md. Points customer_360_table at the customer's table or a mapping view; not built yet."
+      },
+      {
+        "id": "lakeflow",
+        "type": "lakeflow-block",
+        "col": "pipeline",
+        "row": 0,
+        "params": {
+          "gold_desc": "Program results, offer outcomes"
+        }
+      },
+      {
+        "id": "c360",
+        "type": "feature-store",
+        "col": "c360",
+        "row": 0,
+        "label": "Customer 360",
+        "desc": "Yours plugged in, or the sample one"
+      },
+      {
+        "id": "lakebase",
+        "type": "lakebase",
+        "col": "c360",
+        "row": 2,
+        "label": "Lakebase",
+        "desc": "Profiles + live campaign state, by key",
+        "ai_reasoning": "Holds the online feature store and the campaign state the agent writes, so the endpoint reads both in milliseconds. Campaign state is planned (PLAN.md coverage map), not built yet."
+      },
+      {
+        "id": "model-training",
+        "type": "model-training",
+        "col": "models",
+        "row": 0,
+        "label": "Uplift model",
+        "desc": "Will this offer change what they buy?"
+      },
+      {
+        "id": "registry",
+        "type": "uc-model-registry",
+        "col": "models",
+        "row": 2,
+        "desc": "nbo_decision_service @prod"
+      },
+      {
+        "id": "recommender",
+        "type": "ml-model",
+        "col": "models",
+        "row": 4,
+        "label": "Program scorer",
+        "desc": "Forecasts profit per offer, region, change",
+        "ai_reasoning": "nbo_recommender (src/09_recommender.py); feeds the campaign agent's candidate actions."
+      },
+      {
+        "id": "model-serving",
+        "type": "model-serving",
+        "col": "serving",
+        "row": 2,
+        "label": "Real-time decision",
+        "desc": "Best offer per shopper, in ms, or none"
+      },
+      {
+        "id": "sql-lakehouse",
+        "type": "sql-lakehouse",
+        "col": "serving",
+        "row": 4,
+        "desc": "Results, decisions, agent actions"
+      },
+      {
+        "id": "guardrails",
+        "type": "logo",
+        "icon": "dbTable",
+        "text": "offer_guardrails",
+        "caption": "right",
+        "col": "agent",
+        "row": 2,
+        "desc": "On/off, budget, caps, margin floor per offer",
+        "ai_reasoning": "Table exists in the trial workspace (created 2026-11-21) but not in this repo; origin unconfirmed. P2 builds on it once confirmed."
+      },
+      {
+        "id": "agent",
+        "type": "supervisor-agent",
+        "col": "agent",
+        "row": 4,
+        "label": "Campaign Agent",
+        "desc": "Starts, stops, scales offers on its own",
+        "ai_reasoning": "D4: no approval queue; acts within guardrails; human can revert. Agent acting is planned, not built (today it only answers questions and the scorer only proposes)."
+      },
+      {
+        "id": "app",
+        "type": "databricks-apps-work",
+        "col": "consume",
+        "row": 0,
+        "label": "Offer agent app",
+        "desc": "Agent activity, guardrails, revert, customer 360"
+      },
+      {
+        "id": "dashboard",
+        "type": "ai-bi-dashboard",
+        "col": "consume",
+        "row": 2,
+        "label": "Campaign dashboard",
+        "desc": "Started, stopped, scaled, and the profit impact"
+      },
+      {
+        "id": "genie",
+        "type": "genie",
+        "col": "consume",
+        "row": 4
+      },
+      {
+        "id": "db-platform",
+        "type": "db-platform",
+        "pin": {
+          "at": "top-left",
+          "to": "platform-box"
+        }
+      },
+      {
+        "id": "governance-block",
+        "type": "governance-block",
+        "pin": {
+          "at": "top-right",
+          "to": "platform-box"
+        },
+        "params": {
+          "genie_ontology": false
+        }
+      },
+      {
+        "id": "platform-box",
+        "type": "box",
+        "wraps": [
+          "src-loyalty",
+          "src-pos",
+          "src-offers",
+          "src-promos",
+          "lakeflow",
+          "c360",
+          "lakebase",
+          "model-training",
+          "registry",
+          "recommender",
+          "model-serving",
+          "sql-lakehouse",
+          "agent",
+          "app",
+          "dashboard",
+          "genie",
+          "src-c360",
+          "guardrails"
+        ]
+      },
+      {
+        "id": "retailer",
+        "type": "source",
+        "col": "serving",
+        "row": 7,
+        "label": "Retailer app + push",
+        "icon": "file:persona/user",
+        "desc": "Shopper walks in; offer delivered"
+      },
+      {
+        "id": "retailer-box",
+        "type": "box",
+        "title": "Retailer stack (unchanged)",
+        "wraps": [
+          "retailer"
+        ],
+        "style": {
+          "borderStyle": "dashed"
+        }
+      },
+      {
+        "id": "note-guardrails",
+        "type": "note",
+        "text": "Guardrails, not approvals: budget cap, minimum offers before acting, auto-pause below the return target, limited change per run. A human can revert any action.",
+        "below": "agent",
+        "gap": 32
+      },
+      {
+        "id": "note-speed",
+        "type": "note",
+        "text": "Two clocks: each shopper decision takes milliseconds; the agent changes campaigns from days of results.",
+        "rightOf": "retailer-box",
+        "gap": 32
+      },
+      {
+        "id": "note-synthetic",
+        "type": "note",
+        "text": "All shoppers, stores and numbers are synthetic.",
+        "below": "src-promos",
+        "gap": 32
+      },
+      {
+        "id": "note-c360",
+        "type": "note",
+        "text": "Plug in an existing Customer 360: point customer_360_table at your table or a mapping view, list the feature columns, retrain. Training also needs past offers with a holdout.",
+        "above": "c360",
+        "gap": 32
+      },
+      {
+        "id": "note-phases",
+        "type": "note",
+        "text": "Built and live in trial: sample Customer 360, uplift model, real-time endpoint, program scorer proposals, app, dashboard, Genie. Next: P1 plug-in Customer 360 \u00b7 P2 agent applies changes \u00b7 P3 agent activity screens.",
+        "below": "note-synthetic",
+        "gap": 24
+      }
     ],
     "edges": [
-      { "id": "e-src1", "from": "src-loyalty", "to": "lakeflow@in-lakeflow-connect", "flow": true },
-      { "id": "e-src2", "from": "src-pos", "to": "lakeflow@in-lakeflow-connect", "flow": true },
-      { "id": "e-src3", "from": "src-offers", "to": "lakeflow@in-lakeflow-connect", "flow": true },
-      { "id": "e-src4", "from": "src-promos", "to": "lakeflow@in-lakeflow-connect", "flow": true },
-
-      { "id": "e-c360", "from": "lakeflow", "to": "c360", "flow": true, "label": "Build profiles" },
-      { "id": "e-online", "from": "c360", "to": "lakebase", "flow": true, "label": "Online sync" },
-      { "id": "e-train", "from": "c360", "to": "model-training", "flow": true },
-      { "id": "e-register", "from": "model-training", "to": "registry", "flow": true },
-      { "id": "e-load", "from": "registry", "to": "model-serving", "flow": true, "label": "@prod" },
-      { "id": "e-lookup", "from": "lakebase", "to": "model-serving", "flow": true, "label": "Profile + campaign state" },
-
-      { "id": "e-decide", "from": "retailer", "to": "model-serving", "arrow": "both", "label": "Check-in / offer" },
-      { "id": "e-inference", "from": "model-serving", "to": "sql-lakehouse", "flow": true, "label": "Every decision logged" },
-      { "id": "e-gold", "from": "lakeflow", "to": "sql-lakehouse", "flow": true, "label": "Results" },
-
-      { "id": "e-score-in", "from": "sql-lakehouse", "to": "recommender", "flow": true },
-      { "id": "e-score-out", "from": "recommender", "to": "agent", "label": "Forecast per action" },
-      { "id": "e-agent-read", "from": "sql-lakehouse", "to": "agent", "flow": true, "label": "Results" },
-      { "id": "e-agent-act", "from": "agent", "to": "lakebase", "label": "Start / stop / scale" },
-      { "id": "e-agent-log", "from": "agent", "to": "sql-lakehouse", "label": "Action log" },
-      { "id": "e-agent-genie", "from": "agent", "to": "genie", "label": "Asks" },
-
-      { "id": "e-dash", "from": "sql-lakehouse", "to": "dashboard", "flow": true },
-      { "id": "e-genie", "from": "sql-lakehouse", "to": "genie", "flow": true },
-      { "id": "e-app", "from": "sql-lakehouse", "to": "app", "flow": true },
-      { "id": "e-app-agent", "from": "app", "to": "agent", "label": "Ask, revert, set guardrails" }
+      {
+        "id": "e-src1",
+        "from": "src-loyalty",
+        "to": "lakeflow@in-lakeflow-connect",
+        "flow": true
+      },
+      {
+        "id": "e-src2",
+        "from": "src-pos",
+        "to": "lakeflow@in-lakeflow-connect",
+        "flow": true
+      },
+      {
+        "id": "e-src3",
+        "from": "src-offers",
+        "to": "lakeflow@in-lakeflow-connect",
+        "flow": true
+      },
+      {
+        "id": "e-src4",
+        "from": "src-promos",
+        "to": "lakeflow@in-lakeflow-connect",
+        "flow": true
+      },
+      {
+        "id": "e-c360-plug",
+        "from": "src-c360",
+        "to": "c360",
+        "dashed": true,
+        "arrow": "end",
+        "label": "Plug in"
+      },
+      {
+        "id": "e-c360",
+        "from": "lakeflow",
+        "to": "c360",
+        "flow": true,
+        "label": "Build profiles"
+      },
+      {
+        "id": "e-online",
+        "from": "c360",
+        "to": "lakebase",
+        "flow": true,
+        "label": "Online sync"
+      },
+      {
+        "id": "e-train",
+        "from": "c360",
+        "to": "model-training",
+        "flow": true
+      },
+      {
+        "id": "e-register",
+        "from": "model-training",
+        "to": "registry",
+        "flow": true
+      },
+      {
+        "id": "e-load",
+        "from": "registry",
+        "to": "model-serving",
+        "flow": true,
+        "label": "@prod"
+      },
+      {
+        "id": "e-lookup",
+        "from": "lakebase",
+        "to": "model-serving",
+        "flow": true,
+        "label": "Profile + campaign state"
+      },
+      {
+        "id": "e-decide",
+        "from": "retailer",
+        "to": "model-serving",
+        "arrow": "both",
+        "label": "Check-in / offer"
+      },
+      {
+        "id": "e-inference",
+        "from": "model-serving",
+        "to": "sql-lakehouse",
+        "flow": true,
+        "label": "Every decision logged"
+      },
+      {
+        "id": "e-gold",
+        "from": "lakeflow",
+        "to": "sql-lakehouse",
+        "flow": true,
+        "label": "Results"
+      },
+      {
+        "id": "e-score-in",
+        "from": "sql-lakehouse",
+        "to": "recommender",
+        "flow": true
+      },
+      {
+        "id": "e-score-out",
+        "from": "recommender",
+        "to": "agent",
+        "label": "Forecast per action"
+      },
+      {
+        "id": "e-agent-read",
+        "from": "sql-lakehouse",
+        "to": "agent",
+        "flow": true,
+        "label": "Results"
+      },
+      {
+        "id": "e-agent-act",
+        "from": "agent",
+        "to": "lakebase",
+        "label": "Start / stop / scale"
+      },
+      {
+        "id": "e-agent-log",
+        "from": "agent",
+        "to": "sql-lakehouse",
+        "label": "Action log"
+      },
+      {
+        "id": "e-agent-genie",
+        "from": "agent",
+        "to": "genie",
+        "label": "Asks"
+      },
+      {
+        "id": "e-dash",
+        "from": "sql-lakehouse",
+        "to": "dashboard",
+        "flow": true
+      },
+      {
+        "id": "e-genie",
+        "from": "sql-lakehouse",
+        "to": "genie",
+        "flow": true
+      },
+      {
+        "id": "e-app",
+        "from": "sql-lakehouse",
+        "to": "app",
+        "flow": true
+      },
+      {
+        "id": "e-guard-set",
+        "from": "app",
+        "to": "guardrails",
+        "label": "Set limits"
+      },
+      {
+        "id": "e-guard-read",
+        "from": "guardrails",
+        "to": "agent",
+        "label": "Limits"
+      },
+      {
+        "id": "e-app-agent",
+        "from": "app",
+        "to": "agent",
+        "label": "Ask, revert"
+      }
     ]
   }
 ]

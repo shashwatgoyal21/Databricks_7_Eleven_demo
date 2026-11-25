@@ -51,10 +51,38 @@ def _connection():
     )
 
 
+def _is_read(sql_text):
+    return sql_text.lstrip().upper().startswith(("SELECT", "WITH", "DESCRIBE", "SHOW"))
+
+
+def _reset_connection():
+    """Drop the cached warehouse connection so the next query opens a fresh one."""
+    try:
+        _connection().close()
+    except Exception:
+        pass
+    _connection.cache_clear()
+
+
 def _query(sql_text, params=None):
-    with _connection().cursor() as cur:
-        cur.execute(sql_text, params or {})
-        return cur.fetchall_arrow().to_pandas()
+    """Run one statement and return a DataFrame. The warehouse connection is cached for the life of the
+    app; after a long idle it can go stale ("Error during request to server"). On that error, reconnect and
+    retry once. A write is retried only if it failed before it was sent, so it can never run twice."""
+    from databricks.sql.exc import InterfaceError, RequestError
+
+    for attempt in (0, 1):
+        sent = False
+        try:
+            with _connection().cursor() as cur:
+                sent = True
+                cur.execute(sql_text, params or {})
+                return cur.fetchall_arrow().to_pandas()
+        except Exception as e:
+            transient = isinstance(e, (RequestError, InterfaceError)) or "Error during request to server" in str(e)
+            if attempt or not transient or (sent and not _is_read(sql_text)):
+                raise
+            log.warning("SQL connection failed (%s); reconnecting", str(e).splitlines()[0][:120])
+            _reset_connection()
 
 
 def _local(name):
